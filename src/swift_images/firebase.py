@@ -55,10 +55,12 @@ class Firebase:
             self.token, self.expires = result['access_token'], now + int(result['expires_in'])
         return {'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'}
 
-    def list(self, collection):
+    def list(self, collection, fields=None):
         documents, token = [], ''
         while True:
-            query = urllib.parse.urlencode({'pageSize': 500, **({'pageToken': token} if token else {})})
+            params = [('pageSize',500)] + ([('pageToken', token)] if token else [])
+            params += [('mask.fieldPaths',field) for field in fields or []]
+            query = urllib.parse.urlencode(params)
             _, _, body = request(self.base + '/' + collection + '?' + query, headers=self.headers())
             result = json.loads(body)
             for doc in result.get('documents', []):

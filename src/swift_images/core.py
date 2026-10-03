@@ -29,6 +29,11 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
+class HTTPFailure(RuntimeError):
+    def __init__(self, status, host=''):
+        self.status, self.host = status, host
+        super().__init__(f'HTTP {status}')
+
 class Robots(urllib.robotparser.RobotFileParser):
     def can_fetch(self, agent, url):
         # Python's standard parser uses the first match; RFC 9309 uses the
@@ -59,7 +64,7 @@ def request(url, method='GET', headers=None, data=None, limit=10_000_000, public
     except urllib.error.HTTPError as error:
         if error.code in (304, 404) or public_redirect and error.code in (301,302,303,307,308):
             return error.code, error.headers, b''
-        raise RuntimeError(f'HTTP {error.code}') from None
+        raise HTTPFailure(error.code, urllib.parse.urlsplit(url).hostname) from None
 
 class SwiftClient:
     def __init__(self, delay=1):
@@ -90,14 +95,19 @@ class SwiftClient:
         return result
 
     def sitemap(self):
-        _, _, body = self.get('https://www.swift.com.br/sitemap.xml')
-        root = ET.fromstring(body)
-        urls = []
-        for loc in root.findall('.//{*}loc'):
-            if '/sitemap/product-' in loc.text:
-                _, _, data = self.get(loc.text)
-                urls.extend(node.text for node in ET.fromstring(data).findall('.//{*}loc'))
-        return sorted(set(safe_url(url) for url in urls if url.endswith('/p')))
+        pending, visited, urls = ['https://www.swift.com.br/sitemap.xml'], set(), set()
+        while pending:
+            url = pending.pop(0)
+            if url in visited: continue
+            if len(visited) >= 50: raise ValueError('Sitemap traversal exceeds limit')
+            visited.add(url)
+            _, _, body = self.get(safe_url(url))
+            root = ET.fromstring(body)
+            locations = [safe_url(node.text.strip()) for node in root.findall('.//{*}loc') if node.text]
+            if root.tag.rsplit('}',1)[-1] == 'sitemapindex': pending.extend(locations)
+            else:
+                urls.update(loc for loc in locations if re.fullmatch(r'/(?:[^/]+/p|detail/[^/]+)/?', urllib.parse.urlsplit(loc).path))
+        return sorted(urls)
 
 class StructuredData(HTMLParser):
     def __init__(self):
@@ -122,28 +132,45 @@ class StructuredData(HTMLParser):
             except json.JSONDecodeError:
                 pass
 
-def product_data(html, page):
+def product_records(html, page):
     parser = StructuredData()
     parser.feed(html)
     queue = list(parser.documents)
+    products = []
     while queue:
         node = queue.pop(0)
         if isinstance(node, list):
             queue.extend(node)
         elif isinstance(node, dict):
-            queue.extend(node.get('@graph', []))
+            graph = node.get('@graph', [])
+            queue.extend(graph if isinstance(graph, list) else [graph])
+            variants = node.get('hasVariant', [])
+            queue.extend(variants if isinstance(variants, list) else [variants])
             types = node.get('@type', [])
             if types == 'Product' or isinstance(types, list) and 'Product' in types:
                 images = node.get('image', [])
-                images = [images] if isinstance(images, (str, dict)) else images
-                image = images[0] if images else None
-                image = image.get('url') if isinstance(image, dict) else image
-                if image and node.get('name'):
-                    safe_url(image)
-                    code = re.match(r'(\d{6,})[-_]', urllib.parse.urlsplit(image).path.rsplit('/', 1)[-1])
-                    return {'name': node['name'], 'image': image, 'page': page,
-                            'code': code.group(1) if code else '', 'sku': str(node.get('sku', ''))}
-    return None
+                images = images if isinstance(images, list) else [images]
+                choices = []
+                for image in images:
+                    image = (image.get('url') or image.get('contentUrl')) if isinstance(image, dict) else image
+                    if not isinstance(image,str): continue
+                    try: safe_url(image)
+                    except ValueError: continue
+                    filename = urllib.parse.unquote(urllib.parse.urlsplit(image).path.rsplit('/', 1)[-1])
+                    code = re.search(r'(?:^|[-_])(\d{6})(?=[-_.])', filename)
+                    choices.append((image, code.group(1) if code else ''))
+                # Prefer an official product-coded photo to a generic first image.
+                if choices and node.get('name'):
+                    image, code = next((item for item in choices if item[1]), choices[0])
+                    brand = node.get('brand', '')
+                    brand = brand.get('name', '') if isinstance(brand,dict) else brand
+                    products.append({'name': str(node['name']), 'image': image, 'page': page,
+                                     'code': code, 'sku': str(node.get('sku', '')), 'brand':str(brand)})
+    return products
+
+def product_data(html, page):
+    products = product_records(html, page)
+    return products[0] if products else None
 
 def normalize(name):
     name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode().lower()
@@ -154,15 +181,8 @@ def normalize(name):
                         if word not in {'swift', 'de', 'da', 'do', 'das', 'dos', 'e'}))
 
 def match_product(product, candidates):
-    code = str(product.get('codigo', '')).removesuffix('.0')
-    exact_code = [item for item in candidates if item['code'] and item['code'] == code]
-    # The public image filename carries Swift's original product code.
-    if len({item['image'] for item in exact_code}) == 1:
-        return exact_code[0]
-    exact_name = [item for item in candidates if normalize(item['name']) == normalize(product['nome'])]
-    if len({item['image'] for item in exact_name}) == 1:
-        return exact_name[0]
-    return None
+    from .matching import ProductMatcher
+    return ProductMatcher(candidates).find(product)[0]
 
 def optimize(body):
     if len(body) > 10_000_000:

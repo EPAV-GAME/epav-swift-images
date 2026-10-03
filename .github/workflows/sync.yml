@@ -12,6 +12,10 @@ on:
         description: 'Quantidade de alimentos (0 = todos)'
         default: '0'
         type: string
+      missing_only:
+        description: 'Priorizar execução somente dos produtos do jogo sem foto'
+        type: boolean
+        default: false
       product_code:
         description: 'Opcional: código Swift para execução de um alimento'
         default: ''
@@ -37,6 +41,11 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt
+      - uses: actions/cache/restore@v4
+        with:
+          path: reports/swift-public-catalog.json
+          key: ${{ runner.os }}-swift-public-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-swift-public-v2-
       - name: Sincronizar catálogo
         env:
           PYTHONPATH: src
@@ -47,15 +56,24 @@ jobs:
           PRODUCT_LIMIT: ${{ inputs.limit || '0' }}
           PRODUCT_CODE: ${{ inputs.product_code || '' }}
           SOURCE_PAGE: ${{ inputs.source_page || '' }}
+          MISSING_ONLY: ${{ inputs.missing_only || false }}
         run: |
           args=()
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ "$MISSING_ONLY" = "true" ]; then args+=(--missing-only); fi
           if [ -n "$PRODUCT_CODE" ] || [ -n "$SOURCE_PAGE" ]; then args+=(--product-code "$PRODUCT_CODE" --source-page "$SOURCE_PAGE"); fi
           python -m swift_images.sync --limit "$PRODUCT_LIMIT" "${args[@]}"
+      - uses: actions/cache/save@v4
+        if: always() && hashFiles('reports/swift-public-catalog.json') != ''
+        with:
+          path: reports/swift-public-catalog.json
+          key: ${{ runner.os }}-swift-public-v2-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: resumo-sincronizacao
-          path: reports/latest.json
+          path: |
+            reports/latest.json
+            reports/unmatched.json
           if-no-files-found: ignore
           retention-days: 14
