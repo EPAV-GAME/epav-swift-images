@@ -12,6 +12,14 @@ on:
         description: 'Quantidade de alimentos (0 = todos)'
         default: '0'
         type: string
+      product_code:
+        description: 'Opcional: código Swift para execução de um alimento'
+        default: ''
+        type: string
+      source_page:
+        description: 'Opcional: página oficial /p desse alimento (usar com código)'
+        default: ''
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -37,9 +45,12 @@ jobs:
           IMAGE_SERVICE_URL: ${{ vars.IMAGE_SERVICE_URL }}
           DRY_RUN: ${{ inputs.dry_run || false }}
           PRODUCT_LIMIT: ${{ inputs.limit || '0' }}
+          PRODUCT_CODE: ${{ inputs.product_code || '' }}
+          SOURCE_PAGE: ${{ inputs.source_page || '' }}
         run: |
           args=()
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          if [ -n "$PRODUCT_CODE" ] || [ -n "$SOURCE_PAGE" ]; then args+=(--product-code "$PRODUCT_CODE" --source-page "$SOURCE_PAGE"); fi
           python -m swift_images.sync --limit "$PRODUCT_LIMIT" "${args[@]}"
       - uses: actions/upload-artifact@v4
         if: always()

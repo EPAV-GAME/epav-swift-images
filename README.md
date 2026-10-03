@@ -45,3 +45,9 @@ python -m unittest discover -s tests -v
 ```
 
 Execução real exige `IMAGE_SYNC_TOKEN`. `--limit 0` processa todos os alimentos. O limite se aplica aos alimentos, não à indexação pública. Produtos fora do catálogo atual da Swift podem permanecer sem imagem.
+
+Para verificar ou repetir um alimento específico, informar juntos `--product-code` e `--source-page`. A página precisa estar no sitemap oficial e sua foto precisa conter o código informado. O mesmo recurso está disponível na execução manual do workflow.
+
+```powershell
+python -m swift_images.sync --product-code 616920 --source-page https://www.swift.com.br/file-de-peito-de-frango-swift-1kg/p --dry-run
+```

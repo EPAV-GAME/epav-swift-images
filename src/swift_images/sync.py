@@ -56,7 +56,11 @@ def main():
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--limit', type=int, default=0)
     parser.add_argument('--report', default='reports/latest.json')
+    parser.add_argument('--product-code', default='')
+    parser.add_argument('--source-page', default='')
     args = parser.parse_args()
+    if bool(args.product_code) != bool(args.source_page):
+        parser.error('--product-code and --source-page must be provided together')
     raw = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
     if not raw:
         raw = Path(os.environ['FIREBASE_SERVICE_ACCOUNT_FILE']).read_text(encoding='utf-8-sig')
@@ -68,15 +72,26 @@ def main():
     if not args.dry_run and not token:
         raise ValueError('IMAGE_SYNC_TOKEN required')
     products = firebase.list('produtos_swift')
+    if args.product_code:
+        products = [p for p in products if str(p.get('codigo', '')).removesuffix('.0') == args.product_code]
+        if not products:
+            raise ValueError('Product code not found in Firebase')
     states = {state['id']: state for state in firebase.list('sincronizacao_imagens_swift')}
     client = SwiftClient()
     report = dict(products=len(products), pages=0, pageErrors=0, updated=0, unchanged=0, unmatched=0, errors=0, dryRun=args.dry_run)
     index = []
-    for url in client.sitemap():
+    urls = client.sitemap()
+    if args.source_page:
+        if args.source_page not in urls:
+            raise ValueError('Selected product page is not in the official Swift sitemap')
+        urls = [args.source_page]
+    for url in urls:
         try:
             status, _, body = client.get(url)
             candidate = product_data(body.decode('utf-8', 'replace'), url) if status == 200 else None
             if candidate:
+                if args.product_code and candidate['code'] != args.product_code:
+                    raise ValueError('Selected page does not carry the requested original Swift code')
                 index.append(candidate)
             else:
                 report['pageErrors'] += 1
