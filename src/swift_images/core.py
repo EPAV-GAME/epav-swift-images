@@ -49,7 +49,7 @@ class Robots(urllib.robotparser.RobotFileParser):
         return max(matches, default=(0, True))[1]
 
 def request(url, method='GET', headers=None, data=None, limit=10_000_000, public_redirect=False):
-    req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
+    req = urllib.request.Request(url, data=data, method=method, headers={'User-Agent': AGENT, **(headers or {})})
     try:
         with urllib.request.build_opener(NoRedirect()).open(req, timeout=40) as response:
             body = response.read(limit + 1)
