@@ -55,10 +55,10 @@ def request(url, method='GET', headers=None, data=None, limit=10_000_000, public
             body = response.read(limit + 1)
             if len(body) > limit:
                 raise ValueError('Response exceeds size limit')
-            return response.status, dict(response.headers), body
+            return response.status, response.headers, body
     except urllib.error.HTTPError as error:
         if error.code in (304, 404) or public_redirect and error.code in (301,302,303,307,308):
-            return error.code, dict(error.headers), b''
+            return error.code, error.headers, b''
         raise RuntimeError(f'HTTP {error.code}') from None
 
 class SwiftClient:
