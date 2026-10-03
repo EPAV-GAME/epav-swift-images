@@ -1,0 +1,50 @@
+name: Sincronizar imagens Swift
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Simular sem gravar imagens ou alterar Firebase'
+        type: boolean
+        default: true
+      limit:
+        description: 'Quantidade de alimentos (0 = todos)'
+        default: '0'
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: swift-image-sync
+  cancel-in-progress: false
+jobs:
+  sync:
+    if: vars.SYNC_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Sincronizar catálogo
+        env:
+          PYTHONPATH: src
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          IMAGE_SYNC_TOKEN: ${{ secrets.IMAGE_SYNC_TOKEN }}
+          IMAGE_SERVICE_URL: ${{ vars.IMAGE_SERVICE_URL }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+          PRODUCT_LIMIT: ${{ inputs.limit || '0' }}
+        run: |
+          args=()
+          if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
+          python -m swift_images.sync --limit "$PRODUCT_LIMIT" "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: resumo-sincronizacao
+          path: reports/latest.json
+          if-no-files-found: ignore
+          retention-days: 14

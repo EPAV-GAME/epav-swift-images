@@ -1,0 +1,1 @@
+{"name":"epav-swift-images-worker","version":"1.0.0","private":true,"type":"module","scripts":{"build":"wrangler deploy --dry-run","deploy":"wrangler deploy","test":"node --test"},"devDependencies":{"wrangler":"4.146.0"}}
