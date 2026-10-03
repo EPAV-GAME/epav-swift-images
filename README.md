@@ -34,7 +34,7 @@ O segredo Firebase permite operações privilegiadas. Nunca colocá-lo nos arqui
 
 ## Execução diária
 
-Workflow **Sincronizar imagens Swift** às 09:17 UTC (06:17 em São Paulo), além de execução manual. O GitHub pode atrasar o horário; em repositórios públicos, desativa agendamentos após 60 dias sem atividade. O relatório contém apenas contadores. Falhas conservam imagens anteriores e sinalizam execução com erro.
+Workflow **Sincronizar imagens Swift** às 09:17 UTC (06:17 em São Paulo), além de execução manual. O GitHub pode atrasar o horário; em repositórios públicos, desativa agendamentos após 60 dias sem atividade. O relatório contém apenas contadores. Páginas removidas (404) ou sem metadados utilizáveis são contabilizadas em `pagesSkipped` e identificadas nos logs pela URL pública, sem causar falha geral. Erros reais de consulta (`pageErrors`), upload ou Firebase (`errors`) continuam sinalizando execução com erro. Nenhuma dessas situações apaga fotos anteriores. Se nenhuma página fornecer produtos utilizáveis, a execução falha.
 
 ```powershell
 $env:PYTHONPATH='src'

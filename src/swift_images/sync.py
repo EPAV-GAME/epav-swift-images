@@ -6,6 +6,35 @@ from pathlib import Path
 from .core import SwiftClient, VERSION, match_product, optimize, product_data, request
 from .firebase import Firebase
 
+def index_pages(client, urls, report, expected_code=''):
+    index = []
+    for url in urls:
+        try:
+            status, _, body = client.get(url)
+            if status == 404:
+                report['pagesSkipped'] += 1
+                print(json.dumps({'event': 'page_skipped', 'reason': 'not_found', 'page': url}), flush=True)
+            elif status != 200:
+                raise RuntimeError('Unexpected page response')
+            else:
+                candidate = product_data(body.decode('utf-8', 'replace'), url)
+                if candidate:
+                    if expected_code and candidate['code'] != expected_code:
+                        raise ValueError('Selected page does not carry the requested original Swift code')
+                    index.append(candidate)
+                else:
+                    report['pagesSkipped'] += 1
+                    print(json.dumps({'event': 'page_skipped', 'reason': 'no_product_image_metadata', 'page': url}), flush=True)
+        except (RuntimeError, ValueError, OSError) as error:
+            report['pageErrors'] += 1
+            # Only public source URLs and exception classes; omit potentially sensitive diagnostics.
+            print(json.dumps({'event': 'page_error', 'reason': type(error).__name__, 'page': url}), flush=True)
+        report['pages'] += 1
+        if report['pages'] % 50 == 0:
+            print(json.dumps({'indexedPages': report['pages'], 'usableProducts': len(index),
+                              'pagesSkipped': report['pagesSkipped'], 'pageErrors': report['pageErrors']}), flush=True)
+    return index
+
 def sync_one(product, candidate, state, client, firebase, service, token, dry_run=False):
     old = product.get('imagemSwift', {})
     source = candidate['image']
@@ -78,28 +107,13 @@ def main():
             raise ValueError('Product code not found in Firebase')
     states = {state['id']: state for state in firebase.list('sincronizacao_imagens_swift')}
     client = SwiftClient()
-    report = dict(products=len(products), pages=0, pageErrors=0, updated=0, unchanged=0, unmatched=0, errors=0, dryRun=args.dry_run)
-    index = []
+    report = dict(products=len(products), pages=0, pagesSkipped=0, pageErrors=0, updated=0, unchanged=0, unmatched=0, errors=0, dryRun=args.dry_run)
     urls = client.sitemap()
     if args.source_page:
         if args.source_page not in urls:
             raise ValueError('Selected product page is not in the official Swift sitemap')
         urls = [args.source_page]
-    for url in urls:
-        try:
-            status, _, body = client.get(url)
-            candidate = product_data(body.decode('utf-8', 'replace'), url) if status == 200 else None
-            if candidate:
-                if args.product_code and candidate['code'] != args.product_code:
-                    raise ValueError('Selected page does not carry the requested original Swift code')
-                index.append(candidate)
-            else:
-                report['pageErrors'] += 1
-        except (RuntimeError, ValueError, OSError):
-            report['pageErrors'] += 1
-        report['pages'] += 1
-        if report['pages'] % 50 == 0:
-            print(json.dumps({'indexedPages': report['pages'], 'usableProducts': len(index)}), flush=True)
+    index = index_pages(client, urls, report, args.product_code)
     if not index:
         raise RuntimeError('No usable Swift products; existing images preserved')
     products.sort(key=lambda p: (bool(p.get('imagemSwift')), states.get(p['id'], {}).get('checkedAt', ''), p['id']))
