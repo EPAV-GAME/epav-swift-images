@@ -56,30 +56,31 @@ def main():
     raw=os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
     if not raw: raw=Path(os.environ['FIREBASE_SERVICE_ACCOUNT_FILE']).read_text(encoding='utf-8-sig')
     firebase=Firebase(json.loads(raw))
-    report=dict(dryRun=not args.apply,productsBefore=0,duplicateCandidates=0,archived=0,conflicts=0,errors=0)
-    try:
-        if args.restore:
-            if not args.apply: raise ValueError('Restoration requires --apply')
-            firebase.restore_product(args.restore);report['restored']=1
-        else:
-            fields=['nome','codigo','disponivelNoJogo','imagemSwift','dadosOriginais.Marca',
-                    'dadosOriginais.Unidade Medida','atualizadoPor']
-            products=firebase.list('produtos_swift',fields=fields)
-            plan=duplicate_plan(products);report.update(productsBefore=len(products),duplicateCandidates=len(plan))
-            by_id={p['id']:p for p in products}
-            for action in plan:
-                try:
-                    outcome=archive_action(firebase,by_id[action['id']],action,not args.apply)
-                    report['archived']+=args.apply and outcome=='archived'
-                except HTTPFailure as error:
-                    if error.status in (409,412):report['conflicts']+=1;continue
-                    raise
-    except HTTPFailure as error:
-        report.update(errors=1,blocked='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable',
-                      httpStatus=error.status,httpHost=error.host)
-    Path(args.report).parent.mkdir(parents=True,exist_ok=True)
-    Path(args.report).write_text(json.dumps(report,indent=2),encoding='utf-8')
-    print(json.dumps(report),flush=True)
-    if report['errors']:raise SystemExit(1)
+    with firebase:
+        report=dict(dryRun=not args.apply,productsBefore=0,duplicateCandidates=0,archived=0,conflicts=0,errors=0)
+        try:
+            if args.restore:
+                if not args.apply: raise ValueError('Restoration requires --apply')
+                firebase.restore_product(args.restore);report['restored']=1
+            else:
+                fields=['nome','codigo','disponivelNoJogo','imagemSwift','dadosOriginais.Marca',
+                        'dadosOriginais.Unidade Medida','atualizadoPor']
+                products=firebase.list('produtos_swift',fields=fields)
+                plan=duplicate_plan(products);report.update(productsBefore=len(products),duplicateCandidates=len(plan))
+                by_id={p['id']:p for p in products}
+                for action in plan:
+                    try:
+                        outcome=archive_action(firebase,by_id[action['id']],action,not args.apply)
+                        report['archived']+=args.apply and outcome=='archived'
+                    except HTTPFailure as error:
+                        if error.status in (409,412):report['conflicts']+=1;continue
+                        raise
+        except HTTPFailure as error:
+            report.update(errors=1,blocked='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable',
+                          httpStatus=error.status,httpHost=error.host)
+        Path(args.report).parent.mkdir(parents=True,exist_ok=True)
+        Path(args.report).write_text(json.dumps(report,indent=2),encoding='utf-8')
+        print(json.dumps(report),flush=True)
+        if report['errors']:raise SystemExit(1)
 
 if __name__=='__main__':main()

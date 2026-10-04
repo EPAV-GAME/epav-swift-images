@@ -151,108 +151,109 @@ def main():
     if not raw:
         raw = Path(os.environ['FIREBASE_SERVICE_ACCOUNT_FILE']).read_text(encoding='utf-8-sig')
     firebase = Firebase(json.loads(raw))
-    service = os.environ['IMAGE_SERVICE_URL'].rstrip('/')
-    if not service.startswith('https://epav-swift-images.') or not service.endswith('.workers.dev'):
-        raise ValueError('Expected epav-swift-images Worker HTTPS URL')
-    token = os.environ.get('IMAGE_SYNC_TOKEN', '')
-    if not args.dry_run and not token:
-        raise ValueError('IMAGE_SYNC_TOKEN required')
-    report = dict(products=0, availableProducts=0, availableWithoutImage=0, pages=0, pagesSkipped=0,metadataSkipped=0,
-                  pageErrors=0, updated=0, unchanged=0, unmatched=0, unmatchedAvailable=0, errors=0,
-                  processed=0, matchesByMethod={}, unmatchedReasons={}, dryRun=args.dry_run,
-                  duplicateCandidates=0,deduplicated=0,archivedMissing=0,archiveConflicts=0,pruneCandidates=0)
-    unmatched, cache = [], read_cache(args.catalog_cache)
-    try:
-        products = firebase.list('produtos_swift', fields=['nome','codigo','disponivelNoJogo','imagemSwift',
-                                 'dadosOriginais.Marca','dadosOriginais.Unidade Medida','atualizadoPor'])
-        if args.product_code:
-            products = [p for p in products if str(p.get('codigo', '')).removesuffix('.0').strip() == args.product_code]
-            if not products:raise ValueError('Product code not found in Firebase')
-        if args.deduplicate:
-            plan=duplicate_plan(products);report['duplicateCandidates']=len(plan)
-            by_id={p['id']:p for p in products};removed=set()
-            for action in plan:
-                try:
-                    outcome=archive_action(firebase,by_id[action['id']],action,args.dry_run)
-                    if not args.dry_run and outcome=='archived':report['deduplicated']+=1
-                    removed.add(action['id'])
-                except HTTPFailure as error:
-                    if error.status in (409,412):report['archiveConflicts']+=1;continue
-                    raise
-            products=[p for p in products if p['id'] not in removed]
-        states = {state['id']: state for state in firebase.list('sincronizacao_imagens_swift')}
-    except HTTPFailure as error:
-        report.update(errors=1, blocked='firebase_quota_exceeded' if error.status == 429 else 'firebase_unavailable',
-                      httpStatus=error.status,httpHost=error.host)
-        write_report(args.report, report, unmatched)
-        raise SystemExit(1) from None
-    report['availableProducts'] = sum(p.get('disponivelNoJogo') is True for p in products)
-    report['availableWithoutImage'] = sum(p.get('disponivelNoJogo') is True and not (p.get('imagemSwift') or {}).get('url') for p in products)
-    if args.missing_only: products = [p for p in products if p.get('disponivelNoJogo') is True and not (p.get('imagemSwift') or {}).get('url')]
-    client = SwiftClient()
-    report['products'] = len(products)
-    try:
-        urls = client.sitemap()
-        if args.source_page:
-            if args.source_page not in urls:
-                raise ValueError('Selected product page is not in the official Swift sitemap')
-            urls = [args.source_page]
-        report.update(expectedPages=len(urls),fullCatalog=not bool(args.source_page))
-        prior_pages=len(cache)
-        if args.prune_unmatched and prior_pages and len(urls)<prior_pages*.85:
-            report['pruneSkipped']='catalog_shrank_unexpectedly'
-        index = index_pages(client, urls, report, args.product_code, cache)
-    except (RuntimeError,ValueError,OSError):
-        report.update(errors=report['errors']+1, blocked='swift_catalog_unavailable')
-        write_report(args.report, report, unmatched)
-        raise SystemExit(1) from None
-    write_cache(args.catalog_cache, cache)
-    if not index:
-        report.update(errors=report['errors']+1, blocked='swift_catalog_empty')
-        write_report(args.report, report, unmatched)
-        raise SystemExit(1)
-    matcher, downloads = ProductMatcher(index), DownloadCache()
-    products.sort(key=lambda p: (p.get('disponivelNoJogo') is not True, bool((p.get('imagemSwift') or {}).get('url')), states.get(p['id'], {}).get('checkedAt', ''), p['id']))
-    for product in products[:args.limit or None]:
-        report['processed'] += 1
-        candidate, reason = matcher.find(product)
-        if not candidate:
-            report['unmatched'] += 1
-            report['unmatchedAvailable'] += product.get('disponivelNoJogo') is True
-            report['unmatchedReasons'][reason] = report['unmatchedReasons'].get(reason, 0) + 1
-            unmatched.append(dict(id=product['id'], codigo=str(product.get('codigo','')), available=product.get('disponivelNoJogo') is True, reason=reason))
-            if args.prune_unmatched and reason in ABSENT_REASONS:
-                report['pruneCandidates']+=1
-                if absence_allowed(report,index) and not report.get('pruneSkipped'):
-                    try:
-                        outcome=archive_action(firebase,product,dict(reason='not_found_in_swift'),args.dry_run)
-                        if not args.dry_run and outcome=='archived':report['archivedMissing']+=1
-                    except HTTPFailure as error:
-                        if error.status in (409,412):report['archiveConflicts']+=1
-                        else:
-                            report['errors']+=1
-                            report['blocked']='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable'
-                            report.update(httpStatus=error.status,httpHost=error.host)
-                            break
-                else:report.setdefault('pruneSkipped','incomplete_official_catalog')
-            continue
-        report['matchesByMethod'][reason] = report['matchesByMethod'].get(reason, 0) + 1
+    with firebase:
+        service = os.environ['IMAGE_SERVICE_URL'].rstrip('/')
+        if not service.startswith('https://epav-swift-images.') or not service.endswith('.workers.dev'):
+            raise ValueError('Expected epav-swift-images Worker HTTPS URL')
+        token = os.environ.get('IMAGE_SYNC_TOKEN', '')
+        if not args.dry_run and not token:
+            raise ValueError('IMAGE_SYNC_TOKEN required')
+        report = dict(products=0, availableProducts=0, availableWithoutImage=0, pages=0, pagesSkipped=0,metadataSkipped=0,
+                      pageErrors=0, updated=0, unchanged=0, unmatched=0, unmatchedAvailable=0, errors=0,
+                      processed=0, matchesByMethod={}, unmatchedReasons={}, dryRun=args.dry_run,
+                      duplicateCandidates=0,deduplicated=0,archivedMissing=0,archiveConflicts=0,pruneCandidates=0)
+        unmatched, cache = [], read_cache(args.catalog_cache)
         try:
-            report[sync_one(product, candidate, states.get(product['id'], {}), client, firebase, service, token, args.dry_run, downloads, reason)] += 1
+            products = firebase.list('produtos_swift', fields=['nome','codigo','disponivelNoJogo','imagemSwift',
+                                     'dadosOriginais.Marca','dadosOriginais.Unidade Medida','atualizadoPor'])
+            if args.product_code:
+                products = [p for p in products if str(p.get('codigo', '')).removesuffix('.0').strip() == args.product_code]
+                if not products:raise ValueError('Product code not found in Firebase')
+            if args.deduplicate:
+                plan=duplicate_plan(products);report['duplicateCandidates']=len(plan)
+                by_id={p['id']:p for p in products};removed=set()
+                for action in plan:
+                    try:
+                        outcome=archive_action(firebase,by_id[action['id']],action,args.dry_run)
+                        if not args.dry_run and outcome=='archived':report['deduplicated']+=1
+                        removed.add(action['id'])
+                    except HTTPFailure as error:
+                        if error.status in (409,412):report['archiveConflicts']+=1;continue
+                        raise
+                products=[p for p in products if p['id'] not in removed]
+            states = {state['id']: state for state in firebase.list('sincronizacao_imagens_swift')}
         except HTTPFailure as error:
-            report['errors'] += 1
-            report.update(httpStatus=error.status,httpHost=error.host)
-            if error.host == 'firestore.googleapis.com' and error.status == 429:
-                report['blocked'] = 'firebase_quota_exceeded'
-                break
-        except (RuntimeError, ValueError, OSError):
-            # Never log credentials, private catalog values or authenticated request objects.
-            report['errors'] += 1
-        if report['processed'] % 50 == 0:
-            print(json.dumps(report), flush=True)
-    write_report(args.report, report, unmatched)
-    if report['errors'] or report['pageErrors']:
-        raise SystemExit(1)
+            report.update(errors=1, blocked='firebase_quota_exceeded' if error.status == 429 else 'firebase_unavailable',
+                          httpStatus=error.status,httpHost=error.host)
+            write_report(args.report, report, unmatched)
+            raise SystemExit(1) from None
+        report['availableProducts'] = sum(p.get('disponivelNoJogo') is True for p in products)
+        report['availableWithoutImage'] = sum(p.get('disponivelNoJogo') is True and not (p.get('imagemSwift') or {}).get('url') for p in products)
+        if args.missing_only: products = [p for p in products if p.get('disponivelNoJogo') is True and not (p.get('imagemSwift') or {}).get('url')]
+        client = SwiftClient()
+        report['products'] = len(products)
+        try:
+            urls = client.sitemap()
+            if args.source_page:
+                if args.source_page not in urls:
+                    raise ValueError('Selected product page is not in the official Swift sitemap')
+                urls = [args.source_page]
+            report.update(expectedPages=len(urls),fullCatalog=not bool(args.source_page))
+            prior_pages=len(cache)
+            if args.prune_unmatched and prior_pages and len(urls)<prior_pages*.85:
+                report['pruneSkipped']='catalog_shrank_unexpectedly'
+            index = index_pages(client, urls, report, args.product_code, cache)
+        except (RuntimeError,ValueError,OSError):
+            report.update(errors=report['errors']+1, blocked='swift_catalog_unavailable')
+            write_report(args.report, report, unmatched)
+            raise SystemExit(1) from None
+        write_cache(args.catalog_cache, cache)
+        if not index:
+            report.update(errors=report['errors']+1, blocked='swift_catalog_empty')
+            write_report(args.report, report, unmatched)
+            raise SystemExit(1)
+        matcher, downloads = ProductMatcher(index), DownloadCache()
+        products.sort(key=lambda p: (p.get('disponivelNoJogo') is not True, bool((p.get('imagemSwift') or {}).get('url')), states.get(p['id'], {}).get('checkedAt', ''), p['id']))
+        for product in products[:args.limit or None]:
+            report['processed'] += 1
+            candidate, reason = matcher.find(product)
+            if not candidate:
+                report['unmatched'] += 1
+                report['unmatchedAvailable'] += product.get('disponivelNoJogo') is True
+                report['unmatchedReasons'][reason] = report['unmatchedReasons'].get(reason, 0) + 1
+                unmatched.append(dict(id=product['id'], codigo=str(product.get('codigo','')), available=product.get('disponivelNoJogo') is True, reason=reason))
+                if args.prune_unmatched and reason in ABSENT_REASONS:
+                    report['pruneCandidates']+=1
+                    if absence_allowed(report,index) and not report.get('pruneSkipped'):
+                        try:
+                            outcome=archive_action(firebase,product,dict(reason='not_found_in_swift'),args.dry_run)
+                            if not args.dry_run and outcome=='archived':report['archivedMissing']+=1
+                        except HTTPFailure as error:
+                            if error.status in (409,412):report['archiveConflicts']+=1
+                            else:
+                                report['errors']+=1
+                                report['blocked']='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable'
+                                report.update(httpStatus=error.status,httpHost=error.host)
+                                break
+                    else:report.setdefault('pruneSkipped','incomplete_official_catalog')
+                continue
+            report['matchesByMethod'][reason] = report['matchesByMethod'].get(reason, 0) + 1
+            try:
+                report[sync_one(product, candidate, states.get(product['id'], {}), client, firebase, service, token, args.dry_run, downloads, reason)] += 1
+            except HTTPFailure as error:
+                report['errors'] += 1
+                report.update(httpStatus=error.status,httpHost=error.host)
+                if error.host == 'firestore.googleapis.com' and error.status == 429:
+                    report['blocked'] = 'firebase_quota_exceeded'
+                    break
+            except (RuntimeError, ValueError, OSError):
+                # Never log credentials, private catalog values or authenticated request objects.
+                report['errors'] += 1
+            if report['processed'] % 50 == 0:
+                print(json.dumps(report), flush=True)
+        write_report(args.report, report, unmatched)
+        if report['errors'] or report['pageErrors']:
+            raise SystemExit(1)
 
 if __name__ == '__main__':
     main()

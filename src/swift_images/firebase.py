@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import os
 import time
 import urllib.parse
 from cryptography.hazmat.primitives import hashes, serialization
@@ -41,6 +42,22 @@ class Firebase:
         self.account = account
         self.base = 'https://firestore.googleapis.com/v1/projects/epav-game/databases/(default)/documents'
         self.token, self.expires = '', 0
+        self.catalog_changed = False
+
+    def __enter__(self): return self
+
+    def __exit__(self, *error):
+        if self.catalog_changed:
+            token=os.environ.get('CACHE_INVALIDATION_TOKEN','')
+            try:
+                if not token: raise ValueError('Cache token absent')
+                request('https://epav-product-evaluator.kevinernandes2012.workers.dev/v1/cache/invalidate',
+                        'POST', {'Authorization':'Bearer '+token}, b'')
+                print(json.dumps({'event':'game_cache_invalidated'}),flush=True)
+            except (RuntimeError, ValueError, OSError):
+                # Database changes remain valid and the cache still expires automatically.
+                print(json.dumps({'event':'game_cache_invalidation_failed','maxCatalogDelaySeconds':900}),flush=True)
+        return False
 
     def headers(self):
         if time.time() > self.expires - 60:
@@ -78,6 +95,7 @@ class Firebase:
         url = self.base + '/' + collection + '/' + urllib.parse.quote(doc_id, safe='') + '?' + urllib.parse.urlencode(query)
         body = json.dumps({'fields': {k: value(v) for k, v in fields.items()}}).encode()
         request(url, 'PATCH', self.headers(), body)
+        if collection == 'produtos_swift': self.catalog_changed = True
 
     def document_name(self, collection, doc_id):
         if not doc_id or '/' in doc_id or doc_id in ('.','..'):raise ValueError('Invalid document ID')
@@ -100,6 +118,8 @@ class Firebase:
         payload={'writes':writes}
         if transaction:payload['transaction']=transaction
         _,_,body=request(self.base+':commit','POST',self.headers(),json.dumps(payload).encode())
+        if any('/produtos_swift/' in write.get('delete', write.get('update', {}).get('name','')) for write in writes):
+            self.catalog_changed = True
         return json.loads(body)
 
     def archive_product(self, doc_id, update_time, reason, canonical_id=None, canonical_time=None):

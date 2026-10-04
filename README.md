@@ -81,3 +81,7 @@ Para verificar ou repetir um alimento específico, informar juntos `--product-co
 ```powershell
 python -m swift_images.sync --product-code 616920 --source-page https://www.swift.com.br/file-de-peito-de-frango-swift-1kg/p --dry-run
 ```
+
+## Cache do jogo
+
+O segredo `CACHE_INVALIDATION_TOKEN` autoriza apenas a invalidação do cache de dados públicos em `epav-product-evaluator`. O bot chama o endpoint HTTPS ao encerrar uma execução que gravou fotos, removeu duplicados ou restaurou produtos, inclusive depois de uma falha parcial. Execuções sem alterações e simulações não invalidam o cache. Se a chamada falhar, o resultado do banco permanece válido e o cache expira em até 15 minutos. Transações e versões para remoção continuam usando leituras diretas do Firebase.

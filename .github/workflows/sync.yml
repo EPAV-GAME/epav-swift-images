@@ -58,6 +58,7 @@ jobs:
         env:
           PYTHONPATH: src
           FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          CACHE_INVALIDATION_TOKEN: ${{ secrets.CACHE_INVALIDATION_TOKEN }}
           IMAGE_SYNC_TOKEN: ${{ secrets.IMAGE_SYNC_TOKEN }}
           IMAGE_SERVICE_URL: ${{ vars.IMAGE_SERVICE_URL }}
           DRY_RUN: ${{ inputs.dry_run || false }}
