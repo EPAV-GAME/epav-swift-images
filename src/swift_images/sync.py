@@ -75,6 +75,8 @@ class DownloadCache:
 
 def sync_one(product, candidate, state, client, firebase, service, token, dry_run=False, downloads=None, match_method='code'):
     old = product.get('imagemSwift') or {}
+    if old.get('manual') is True:
+        return 'manualPreserved'
     source = candidate['image']
     exists = False
     if old.get('key'):
@@ -216,6 +218,11 @@ def main():
         products.sort(key=lambda p: (p.get('disponivelNoJogo') is not True, bool((p.get('imagemSwift') or {}).get('url')), states.get(p['id'], {}).get('checkedAt', ''), p['id']))
         for product in products[:args.limit or None]:
             report['processed'] += 1
+            # Preserve admin photos even when the food cannot be matched on Swift.
+            # This also prevents automatic pruning of that manually managed record.
+            if (product.get('imagemSwift') or {}).get('manual') is True:
+                report['manualPreserved'] = report.get('manualPreserved', 0) + 1
+                continue
             candidate, reason = matcher.find(product)
             if not candidate:
                 report['unmatched'] += 1

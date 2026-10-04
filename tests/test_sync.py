@@ -96,6 +96,14 @@ class SyncTest(unittest.TestCase):
         self.service = 'https://epav-swift-images.test.workers.dev'
 
     @patch('swift_images.sync.request')
+    def test_manual_admin_photo_is_never_replaced(self, request):
+        self.product['imagemSwift'] = dict(manual=True, key='swift/manual.webp')
+        self.assertEqual(sync_one(self.product,self.candidate,{},self.client,self.firebase,self.service,'secret'),'manualPreserved')
+        request.assert_not_called()
+        self.client.get.assert_not_called()
+        self.firebase.patch.assert_not_called()
+
+    @patch('swift_images.sync.request')
     def test_new_then_304(self, request):
         self.client.get.return_value = (200, {'ETag':'source'}, photo())
         request.return_value = (201,{},b'')

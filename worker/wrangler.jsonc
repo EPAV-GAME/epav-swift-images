@@ -5,5 +5,10 @@
   "compatibility_date": "2026-10-03",
   "workers_dev": true,
   "preview_urls": false,
+  "vars": {"FIREBASE_WEB_API_KEY":"AIzaSyBcZXrUyCxxu-u5YIlrojR4iMUfazi8Mks"},
+  "ratelimits": [
+    {"name":"ADMIN_IP_LIMIT","namespace_id":"70012026","simple":{"limit":60,"period":60}},
+    {"name":"ADMIN_USER_LIMIT","namespace_id":"70012027","simple":{"limit":30,"period":60}}
+  ],
   "r2_buckets": [{"binding":"IMAGES","bucket_name":"epav-swift-images"}]
 }

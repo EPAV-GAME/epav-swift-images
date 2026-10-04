@@ -12,6 +12,14 @@ O robô processa primeiro produtos disponíveis no jogo sem URL de foto. Depois 
 
 ## Imagens
 
+### Administração das fotos
+
+O Worker também disponibiliza `GET /admin/storage` e `PUT /admin/images/swift/<sha256>.webp`. Ambos conferem o ID token e a claim `admin` atual diretamente no Firebase, com limites de requisições por usuário/IP. Nenhuma chave privada de conta de serviço é necessária no Worker; `FIREBASE_WEB_API_KEY` identifica publicamente o projeto. CORS administrativo aceita somente `https://epav-game.github.io`.
+
+O dashboard soma os tamanhos dos arquivos únicos paginando o bucket, incluindo versões anteriores, e guarda a medição por até 60 segundos. Não representa memória RAM nem quantidade de produtos com foto. Upload repetido do mesmo conteúdo reutiliza o objeto; dimensões, hash e limite de 100 KB são validados no servidor. O vínculo manual é salvo pelo painel no Firebase com auditoria.
+
+O robô preserva produtos com `imagemSwift.manual=true`: não troca a foto nem arquiva esses registros por ausência no site Swift. O painel mantém o envio manual desativado até a publicação autorizada das regras compartilhadas do Firebase, adiada pelo responsável em 04/10/2026. O dashboard independe dessa alteração.
+
 - WebP, 512 × 512 pixels, fundo branco, proporção preservada.
 - Até 100 KiB por arquivo; qualidade ajustada até cumprir o limite.
 - Bucket privado R2 `epav-swift-images`; leitura pública pelo Worker.
