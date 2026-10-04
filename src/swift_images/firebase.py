@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.parse
 from cryptography.hazmat.primitives import hashes, serialization
@@ -10,6 +11,14 @@ from .core import request, HTTPFailure
 
 def encode(value):
     return base64.urlsafe_b64encode(value).rstrip(b'=')
+
+def quote_field(name):
+    if re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', name):
+        return name
+    return '`' + name.replace('\\', '\\\\').replace('`', '\\`') + '`'
+
+def field_path(path):
+    return '.'.join(quote_field(part) for part in path.split('.'))
 
 def value(data):
     if data is None:
@@ -77,7 +86,7 @@ class Firebase:
         documents, token = [], ''
         while True:
             params = [('pageSize',500)] + ([('pageToken', token)] if token else [])
-            params += [('mask.fieldPaths',field) for field in fields or []]
+            params += [('mask.fieldPaths',field_path(field)) for field in fields or []]
             query = urllib.parse.urlencode(params)
             _, _, body = request(self.base + '/' + collection + '?' + query, headers=self.headers())
             result = json.loads(body)
@@ -89,7 +98,7 @@ class Firebase:
                 return documents
 
     def patch(self, collection, doc_id, fields, update_time=None):
-        query = [('updateMask.fieldPaths', field) for field in fields]
+        query = [('updateMask.fieldPaths', quote_field(field)) for field in fields]
         if update_time:
             query.append(('currentDocument.updateTime', update_time))
         url = self.base + '/' + collection + '/' + urllib.parse.quote(doc_id, safe='') + '?' + urllib.parse.urlencode(query)
