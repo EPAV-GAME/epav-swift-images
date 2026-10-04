@@ -182,7 +182,8 @@ def main():
             products=[p for p in products if p['id'] not in removed]
         states = {state['id']: state for state in firebase.list('sincronizacao_imagens_swift')}
     except HTTPFailure as error:
-        report.update(errors=1, blocked='firebase_quota_exceeded' if error.status == 429 else 'firebase_unavailable')
+        report.update(errors=1, blocked='firebase_quota_exceeded' if error.status == 429 else 'firebase_unavailable',
+                      httpStatus=error.status,httpHost=error.host)
         write_report(args.report, report, unmatched)
         raise SystemExit(1) from None
     report['availableProducts'] = sum(p.get('disponivelNoJogo') is True for p in products)
@@ -231,6 +232,7 @@ def main():
                         else:
                             report['errors']+=1
                             report['blocked']='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable'
+                            report.update(httpStatus=error.status,httpHost=error.host)
                             break
                 else:report.setdefault('pruneSkipped','incomplete_official_catalog')
             continue
@@ -239,6 +241,7 @@ def main():
             report[sync_one(product, candidate, states.get(product['id'], {}), client, firebase, service, token, args.dry_run, downloads, reason)] += 1
         except HTTPFailure as error:
             report['errors'] += 1
+            report.update(httpStatus=error.status,httpHost=error.host)
             if error.host == 'firestore.googleapis.com' and error.status == 429:
                 report['blocked'] = 'firebase_quota_exceeded'
                 break

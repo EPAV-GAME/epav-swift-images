@@ -75,7 +75,8 @@ def main():
                     if error.status in (409,412):report['conflicts']+=1;continue
                     raise
     except HTTPFailure as error:
-        report.update(errors=1,blocked='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable')
+        report.update(errors=1,blocked='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable',
+                      httpStatus=error.status,httpHost=error.host)
     Path(args.report).parent.mkdir(parents=True,exist_ok=True)
     Path(args.report).write_text(json.dumps(report,indent=2),encoding='utf-8')
     print(json.dumps(report),flush=True)
