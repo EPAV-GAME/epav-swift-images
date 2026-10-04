@@ -10,7 +10,10 @@ ALIASES = {'bov': 'bovino', 'suin': 'suino', 'fr': 'frango', 'cong': 'congelado'
            'desoss': 'desossado', 'desc': 'descascado', 'trad': 'tradicional',
            'choc': 'chocolate', 'verm': 'vermelho', 'porc': 'porcionado',
            'sg': 'sem gas', 'cg': 'com gas', 'sete': '7', 'filet':'file',
-           'gr':'g', 'gramas':'g', 'grama':'g', 'litro':'l', 'litros':'l'}
+           'gr':'g', 'gramas':'g', 'grama':'g', 'litro':'l', 'litros':'l',
+           'bovina':'bovino','suina':'suino','temperada':'temperado',
+           'congelada':'congelado','resfriada':'resfriado','organica':'organico',
+           'zer':'zero','acuc':'acucar','energ':'energetico','bul':'bull'}
 BRANDS = ('swift', 'seara', 'friboi', 'maturatta', 'sulita', 'bem brasil', 'crystal',
           'schweppes', 'coca cola', 'santa helena', 'heinz', 'sadia', 'perdigao',
           'aurora', 'kibon', 'nestle', 'tramontina', 'marba', 'massa leve', '1953')
@@ -65,6 +68,11 @@ def image_identity(url):
     query = urllib.parse.urlencode([(k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if k != 'v'])
     return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ''))
 
+def packaging(name):
+    text = plain(name)
+    match = re.search(r'\b(pack|kit|combo)\s*(\d+)?', text)
+    return (match[1],match[2] or '') if match else None
+
 def unique(candidates):
     by_image = {}
     for candidate in candidates: by_image.setdefault(image_identity(candidate['image']), candidate)
@@ -102,7 +110,14 @@ class ProductMatcher:
     def find(self, product):
         code = str(product.get('codigo', '')).removesuffix('.0')
         matches = unique(self.codes.get(code, []))
-        if matches: return (matches[0], 'code') if len(matches) == 1 else (None, 'ambiguous_code')
+        if matches:
+            if len(matches) == 1: return matches[0], 'code'
+            # Pack pages can reuse the single-unit code. Compare packaging first.
+            exact = unique(c for c in matches if normalize(c['name']) == normalize(product['nome']))
+            if len(exact) == 1: return exact[0], 'code_name'
+            same_pack = unique(c for c in matches if packaging(c['name']) == packaging(product['nome']))
+            if len(same_pack) == 1: return same_pack[0], 'code_packaging'
+            return None, 'ambiguous_code'
         wanted = profile(product['nome'], (product.get('dadosOriginais') or {}).get('Marca', ''))
         matches = unique(c for c in self.names.get(normalize(product['nome']), [])
                          if not wanted['brands'] or not profile(c['name'], c.get('brand',''))['brands']

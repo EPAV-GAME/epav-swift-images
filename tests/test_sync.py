@@ -20,7 +20,7 @@ class PageFailuresTest(unittest.TestCase):
         with patch('builtins.print'):
             products = index_pages(client, ['missing', 'removed', 'valid'], report)
         self.assertEqual(len(products), 1)
-        self.assertEqual(report, dict(pages=3, pagesSkipped=2, pageErrors=0))
+        self.assertEqual(report, dict(pages=3, pagesSkipped=2, pageErrors=0, metadataSkipped=1))
 
     def test_network_failures_remain_errors_and_do_not_expose_details(self):
         client = Mock()

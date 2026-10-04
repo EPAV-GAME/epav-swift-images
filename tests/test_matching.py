@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
-from swift_images.core import product_records, SwiftClient, HTTPFailure
+from swift_images.core import product_records, SwiftClient, HTTPFailure, decode_html
 from swift_images.matching import ProductMatcher
 from swift_images.sync import DownloadCache, sync_one, index_pages, main
 from test_sync import photo, PRODUCT_HTML
@@ -38,7 +38,7 @@ class ContextMatchTest(unittest.TestCase):
     def test_ambiguity_never_becomes_an_automatic_assignment(self):
         matcher=ProductMatcher([item('Filé de peito de frango Swift 1kg','a'),item('Filé peito frango Swift 1000g','b')])
         self.assertEqual(matcher.find({'nome':'FILE PEITO SWIFT 1KG'})[1],'ambiguous_context')
-        matcher=ProductMatcher([item('A','a','123456'),item('Other','b','123456')])
+        matcher=ProductMatcher([item('A','a','123456'),item('A','b','123456')])
         self.assertEqual(matcher.find({'nome':'A','codigo':'123456'})[1],'ambiguous_code')
 
     def test_small_spelling_error_requires_same_brand_and_variant(self):
@@ -54,7 +54,17 @@ class ContextMatchTest(unittest.TestCase):
         matcher=ProductMatcher([item('A','https://www.swift.com.br/x.jpg?v=1','123456'),item('A','https://www.swift.com.br/x.jpg?v=2','123456')])
         self.assertEqual(matcher.find({'nome':'A','codigo':'123456'})[1],'code')
 
+    def test_pack_reusing_original_code_keeps_single_unit_image(self):
+        matcher=ProductMatcher([item('Água sem gás Crystal 500ml','single','123456'),
+                                item('Pack 6 Águas sem gás Crystal 500ml','pack','123456')])
+        candidate,reason=matcher.find({'nome':'AGUA CRYSTAL SG PT 500ML','codigo':'123456'})
+        self.assertEqual(candidate['image'],'single');self.assertEqual(reason,'code_packaging')
+        self.assertEqual(matcher.find({'nome':'Pack 6 Águas sem gás Crystal 500ml','codigo':'123456'})[0]['image'],'pack')
+
 class PublicCatalogTest(unittest.TestCase):
+    def test_declared_or_legacy_encoding_preserves_accents(self):
+        self.assertEqual(decode_html('Água'.encode(),{'Content-Type':'text/html; charset=utf-8'}),'Água')
+        self.assertEqual(decode_html('Água'.encode('windows-1252'),{}),'Água')
     def test_all_variants_and_valid_product_coded_image_are_extracted(self):
         html='<script type="application/ld+json">'+json.dumps({'@type':'ProductGroup','hasVariant':[
             {'@type':'Product','name':'A','image':['https://evil.com/banner.jpg',{'contentUrl':'https://swiftbr.vteximg.com.br/arquivos/ids/1/pack%2D123456%2Da.jpg'}]},
@@ -62,6 +72,18 @@ class PublicCatalogTest(unittest.TestCase):
         records=product_records(html,'https://www.swift.com.br/a/p')
         self.assertEqual([p['code'] for p in records],['123456','123457'])
         self.assertNotIn('evil.com',str(records))
+
+    def test_variant_without_photo_blocks_pruning_even_when_other_variant_has_photo(self):
+        html='<script type="application/ld+json">'+json.dumps({'@type':'ProductGroup','hasVariant':[
+            {'@type':'Product','name':'Missing image','image':None},
+            {'@type':'Product','name':'Usable','image':'https://swiftbr.vteximg.com.br/arquivos/123456-a.jpg'}]})+'</script>'
+        client=Mock();client.get.return_value=(200,{'ETag':'tag'},html.encode())
+        cache={};report=dict(pages=0,pagesSkipped=0,pageErrors=0,metadataSkipped=0)
+        self.assertEqual(len(index_pages(client,['url'],report,cache=cache)),1)
+        self.assertEqual(report['metadataSkipped'],1)
+        client.get.return_value=(304,{},b'')
+        index_pages(client,['url'],report,cache=cache)
+        self.assertEqual(report['metadataSkipped'],2)
 
     def test_nested_sitemaps_and_new_detail_urls(self):
         client=SwiftClient();client.get=Mock(side_effect=[

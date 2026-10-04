@@ -1,5 +1,6 @@
 """Public Swift catalog, conservative matching and deterministic image conversion."""
 import hashlib
+import codecs
 import io
 import json
 import re
@@ -132,7 +133,7 @@ class StructuredData(HTMLParser):
             except json.JSONDecodeError:
                 pass
 
-def product_records(html, page):
+def product_records(html, page, include_unpictured=False):
     parser = StructuredData()
     parser.feed(html)
     queue = list(parser.documents)
@@ -160,8 +161,8 @@ def product_records(html, page):
                     code = re.search(r'(?:^|[-_])(\d{6})(?=[-_.])', filename)
                     choices.append((image, code.group(1) if code else ''))
                 # Prefer an official product-coded photo to a generic first image.
-                if choices and node.get('name'):
-                    image, code = next((item for item in choices if item[1]), choices[0])
+                if node.get('name') and (choices or include_unpictured):
+                    image, code = next((item for item in choices if item[1]), choices[0]) if choices else ('','')
                     brand = node.get('brand', '')
                     brand = brand.get('name', '') if isinstance(brand,dict) else brand
                     products.append({'name': str(node['name']), 'image': image, 'page': page,
@@ -171,6 +172,18 @@ def product_records(html, page):
 def product_data(html, page):
     products = product_records(html, page)
     return products[0] if products else None
+
+def decode_html(body, headers):
+    declared = re.search(r'charset\s*=\s*["\']?([\w-]+)', headers.get('Content-Type',''), re.I)
+    if not declared:
+        declared = re.search(r'charset\s*=\s*["\']?([\w-]+)', body[:4096].decode('ascii','ignore'), re.I)
+    if declared:
+        try:
+            codecs.lookup(declared[1])
+            return body.decode(declared[1], 'strict')
+        except (LookupError,UnicodeError): pass
+    try: return body.decode('utf-8','strict')
+    except UnicodeError: return body.decode('windows-1252','replace')
 
 def normalize(name):
     name = unicodedata.normalize('NFKD', name).encode('ascii', 'ignore').decode().lower()

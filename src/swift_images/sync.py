@@ -3,19 +3,20 @@ import datetime
 import json
 import os
 from pathlib import Path
-from .core import SwiftClient, VERSION, HTTPFailure, optimize, product_records, request
+from .core import SwiftClient, VERSION, HTTPFailure, optimize, product_records, decode_html, request
 from .firebase import Firebase
 from .matching import ProductMatcher, MATCH_VERSION
+from .cleanup import duplicate_plan, archive_action, absence_allowed, ABSENT_REASONS
 
 def read_cache(path):
     try:
         data = json.loads(Path(path).read_text(encoding='utf-8'))
-        return data['pages'] if data.get('version') == 2 and isinstance(data.get('pages'), dict) else {}
+        return data['pages'] if data.get('version') == 3 and isinstance(data.get('pages'), dict) else {}
     except (OSError, ValueError, TypeError): return {}
 
 def write_cache(path, pages):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    Path(path).write_text(json.dumps({'version':2,'pages':pages}), encoding='utf-8')
+    Path(path).write_text(json.dumps({'version':3,'pages':pages}), encoding='utf-8')
 
 def write_report(path, report, unmatched):
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -39,10 +40,17 @@ def index_pages(client, urls, report, expected_code='', cache=None):
             elif status not in (200, 304):
                 raise RuntimeError('Unexpected page response')
             else:
-                candidates = cached.get('products', []) if status == 304 else product_records(body.decode('utf-8', 'replace'), url)
+                if status == 304:
+                    candidates=cached.get('products', [])
+                    incomplete=cached.get('metadataIncomplete',False)
+                else:
+                    records=product_records(decode_html(body,headers), url, include_unpictured=True)
+                    candidates=[record for record in records if record['image']]
+                    incomplete=not candidates or len(candidates)!=len(records)
+                if incomplete:report['metadataSkipped']=report.get('metadataSkipped',0)+1
                 if status == 304 and 'products' not in cached: raise ValueError('Uncached 304')
                 if cache is not None and status == 200:
-                    cache[url] = dict(products=candidates, etag=headers.get('ETag',''), lastModified=headers.get('Last-Modified',''))
+                    cache[url] = dict(products=candidates,metadataIncomplete=incomplete,etag=headers.get('ETag',''),lastModified=headers.get('Last-Modified',''))
                 if candidates:
                     if expected_code and not any(c['code'] == expected_code for c in candidates):
                         raise ValueError('Selected page does not carry the requested original Swift code')
@@ -66,7 +74,7 @@ class DownloadCache:
         self.heads, self.responses, self.optimized, self.uploaded = {}, {}, {}, set()
 
 def sync_one(product, candidate, state, client, firebase, service, token, dry_run=False, downloads=None, match_method='code'):
-    old = product.get('imagemSwift', {})
+    old = product.get('imagemSwift') or {}
     source = candidate['image']
     exists = False
     if old.get('key'):
@@ -131,6 +139,8 @@ def main():
     parser.add_argument('--report', default='reports/latest.json')
     parser.add_argument('--catalog-cache', default='reports/swift-public-catalog.json')
     parser.add_argument('--missing-only', action='store_true', help='Only game products without an image')
+    parser.add_argument('--deduplicate', action='store_true', help='Archive exact duplicates, retaining one product')
+    parser.add_argument('--prune-unmatched', action='store_true', help='Archive products absent from a fully checked Swift catalog')
     parser.add_argument('--product-code', default='')
     parser.add_argument('--source-page', default='')
     args = parser.parse_args()
@@ -147,12 +157,29 @@ def main():
     token = os.environ.get('IMAGE_SYNC_TOKEN', '')
     if not args.dry_run and not token:
         raise ValueError('IMAGE_SYNC_TOKEN required')
-    report = dict(products=0, availableProducts=0, availableWithoutImage=0, pages=0, pagesSkipped=0,
+    report = dict(products=0, availableProducts=0, availableWithoutImage=0, pages=0, pagesSkipped=0,metadataSkipped=0,
                   pageErrors=0, updated=0, unchanged=0, unmatched=0, unmatchedAvailable=0, errors=0,
-                  processed=0, matchesByMethod={}, unmatchedReasons={}, dryRun=args.dry_run)
+                  processed=0, matchesByMethod={}, unmatchedReasons={}, dryRun=args.dry_run,
+                  duplicateCandidates=0,deduplicated=0,archivedMissing=0,archiveConflicts=0,pruneCandidates=0)
     unmatched, cache = [], read_cache(args.catalog_cache)
     try:
-        products = firebase.list('produtos_swift', fields=['nome','codigo','disponivelNoJogo','imagemSwift','dadosOriginais.Marca'])
+        products = firebase.list('produtos_swift', fields=['nome','codigo','disponivelNoJogo','imagemSwift',
+                                 'dadosOriginais.Marca','dadosOriginais.Unidade Medida','atualizadoPor'])
+        if args.product_code:
+            products = [p for p in products if str(p.get('codigo', '')).removesuffix('.0').strip() == args.product_code]
+            if not products:raise ValueError('Product code not found in Firebase')
+        if args.deduplicate:
+            plan=duplicate_plan(products);report['duplicateCandidates']=len(plan)
+            by_id={p['id']:p for p in products};removed=set()
+            for action in plan:
+                try:
+                    outcome=archive_action(firebase,by_id[action['id']],action,args.dry_run)
+                    if not args.dry_run and outcome=='archived':report['deduplicated']+=1
+                    removed.add(action['id'])
+                except HTTPFailure as error:
+                    if error.status in (409,412):report['archiveConflicts']+=1;continue
+                    raise
+            products=[p for p in products if p['id'] not in removed]
         states = {state['id']: state for state in firebase.list('sincronizacao_imagens_swift')}
     except HTTPFailure as error:
         report.update(errors=1, blocked='firebase_quota_exceeded' if error.status == 429 else 'firebase_unavailable')
@@ -161,10 +188,6 @@ def main():
     report['availableProducts'] = sum(p.get('disponivelNoJogo') is True for p in products)
     report['availableWithoutImage'] = sum(p.get('disponivelNoJogo') is True and not (p.get('imagemSwift') or {}).get('url') for p in products)
     if args.missing_only: products = [p for p in products if p.get('disponivelNoJogo') is True and not (p.get('imagemSwift') or {}).get('url')]
-    if args.product_code:
-        products = [p for p in products if str(p.get('codigo', '')).removesuffix('.0') == args.product_code]
-        if not products:
-            raise ValueError('Product code not found in Firebase')
     client = SwiftClient()
     report['products'] = len(products)
     try:
@@ -173,6 +196,10 @@ def main():
             if args.source_page not in urls:
                 raise ValueError('Selected product page is not in the official Swift sitemap')
             urls = [args.source_page]
+        report.update(expectedPages=len(urls),fullCatalog=not bool(args.source_page))
+        prior_pages=len(cache)
+        if args.prune_unmatched and prior_pages and len(urls)<prior_pages*.85:
+            report['pruneSkipped']='catalog_shrank_unexpectedly'
         index = index_pages(client, urls, report, args.product_code, cache)
     except (RuntimeError,ValueError,OSError):
         report.update(errors=report['errors']+1, blocked='swift_catalog_unavailable')
@@ -193,6 +220,19 @@ def main():
             report['unmatchedAvailable'] += product.get('disponivelNoJogo') is True
             report['unmatchedReasons'][reason] = report['unmatchedReasons'].get(reason, 0) + 1
             unmatched.append(dict(id=product['id'], codigo=str(product.get('codigo','')), available=product.get('disponivelNoJogo') is True, reason=reason))
+            if args.prune_unmatched and reason in ABSENT_REASONS:
+                report['pruneCandidates']+=1
+                if absence_allowed(report,index) and not report.get('pruneSkipped'):
+                    try:
+                        outcome=archive_action(firebase,product,dict(reason='not_found_in_swift'),args.dry_run)
+                        if not args.dry_run and outcome=='archived':report['archivedMissing']+=1
+                    except HTTPFailure as error:
+                        if error.status in (409,412):report['archiveConflicts']+=1
+                        else:
+                            report['errors']+=1
+                            report['blocked']='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable'
+                            break
+                else:report.setdefault('pruneSkipped','incomplete_official_catalog')
             continue
         report['matchesByMethod'][reason] = report['matchesByMethod'].get(reason, 0) + 1
         try:

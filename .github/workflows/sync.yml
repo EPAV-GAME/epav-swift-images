@@ -16,6 +16,14 @@ on:
         description: 'Priorizar execução somente dos produtos do jogo sem foto'
         type: boolean
         default: false
+      deduplicate:
+        description: 'Consolidar duplicados com cópia recuperável no Firebase'
+        type: boolean
+        default: true
+      prune_unmatched:
+        description: 'Remover do catálogo produtos não encontrados após consulta completa (guardar cópia)'
+        type: boolean
+        default: true
       product_code:
         description: 'Opcional: código Swift para execução de um alimento'
         default: ''
@@ -44,8 +52,8 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: reports/swift-public-catalog.json
-          key: ${{ runner.os }}-swift-public-v2-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: ${{ runner.os }}-swift-public-v2-
+          key: ${{ runner.os }}-swift-public-v3-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: ${{ runner.os }}-swift-public-v3-
       - name: Sincronizar catálogo
         env:
           PYTHONPATH: src
@@ -57,17 +65,21 @@ jobs:
           PRODUCT_CODE: ${{ inputs.product_code || '' }}
           SOURCE_PAGE: ${{ inputs.source_page || '' }}
           MISSING_ONLY: ${{ inputs.missing_only || false }}
+          DEDUPLICATE: ${{ github.event_name == 'schedule' || inputs.deduplicate }}
+          PRUNE_UNMATCHED: ${{ github.event_name == 'schedule' || inputs.prune_unmatched }}
         run: |
           args=()
           if [ "$DRY_RUN" = "true" ]; then args+=(--dry-run); fi
           if [ "$MISSING_ONLY" = "true" ]; then args+=(--missing-only); fi
+          if [ "$DEDUPLICATE" = "true" ]; then args+=(--deduplicate); fi
+          if [ "$PRUNE_UNMATCHED" = "true" ]; then args+=(--prune-unmatched); fi
           if [ -n "$PRODUCT_CODE" ] || [ -n "$SOURCE_PAGE" ]; then args+=(--product-code "$PRODUCT_CODE" --source-page "$SOURCE_PAGE"); fi
           python -m swift_images.sync --limit "$PRODUCT_LIMIT" "${args[@]}"
       - uses: actions/cache/save@v4
         if: always() && hashFiles('reports/swift-public-catalog.json') != ''
         with:
           path: reports/swift-public-catalog.json
-          key: ${{ runner.os }}-swift-public-v2-${{ github.run_id }}-${{ github.run_attempt }}
+          key: ${{ runner.os }}-swift-public-v3-${{ github.run_id }}-${{ github.run_attempt }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
