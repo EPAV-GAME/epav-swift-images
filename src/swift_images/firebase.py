@@ -65,8 +65,17 @@ class Firebase:
             result=self.call('/v1/sync/dados/'+collection+'?limit=100&after='+urllib.parse.quote(after,safe=''))
             for doc in result['documents']:
                 data={k:decode(v) for k,v in doc['fields'].items()}
-                if fields:data={k:v for k,v in data.items() if k in fields}
-                documents.append(dict(data,id=doc['id'],_updateTime=doc['revision']))
+                if fields:
+                    projected={}
+                    for field in fields:
+                        parts=field.split('.');source=data;target=projected
+                        for part in parts[:-1]:
+                            if not isinstance(source,dict) or part not in source:break
+                            source=source[part];target=target.setdefault(part,{})
+                        else:
+                            if isinstance(source,dict) and parts[-1] in source:target[parts[-1]]=source[parts[-1]]
+                    data=projected
+                documents.append(dict(data,id=doc['id'],_updateTime=doc['revision'],_updatedAt=doc.get('updatedAt','')))
             after=result.get('next')
             if not after:return documents
             if after in seen:raise ValueError('Repeated catalog cursor')

@@ -24,7 +24,7 @@ def duplicate_plan(products):
         rows.sort(key=lambda p: (bool(p.get('atualizadoPor')), p.get('disponivelNoJogo') is True,
                                 bool((p.get('imagemSwift') or {}).get('url')),
                                 (p.get('dadosOriginais') or {}).get('Unidade Medida') == 'PC',
-                                p.get('_updateTime','') if p.get('atualizadoPor') else '',
+                                p.get('_updatedAt',p.get('_updateTime','')) if p.get('atualizadoPor') else '',
                                 str(p['id'])), reverse=True)
         canonical = rows[0]
         for duplicate in rows[1:]:
@@ -53,9 +53,7 @@ def main():
     parser.add_argument('--restore',default='',help='Archive ID to restore to its original product ID')
     parser.add_argument('--report',default='reports/cleanup.json')
     args=parser.parse_args()
-    raw=os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
-    if not raw: raw=Path(os.environ['FIREBASE_SERVICE_ACCOUNT_FILE']).read_text(encoding='utf-8-sig')
-    firebase=Firebase(json.loads(raw))
+    firebase=Firebase()
     with firebase:
         report=dict(dryRun=not args.apply,productsBefore=0,duplicateCandidates=0,archived=0,conflicts=0,errors=0)
         try:
@@ -76,7 +74,7 @@ def main():
                         if error.status in (409,412):report['conflicts']+=1;continue
                         raise
         except HTTPFailure as error:
-            report.update(errors=1,blocked='firebase_quota_exceeded' if error.status==429 else 'firebase_unavailable',
+            report.update(errors=1,blocked='catalog_rate_limited' if error.status==429 else 'catalog_unavailable',
                           httpStatus=error.status,httpHost=error.host)
         Path(args.report).parent.mkdir(parents=True,exist_ok=True)
         Path(args.report).write_text(json.dumps(report,indent=2),encoding='utf-8')

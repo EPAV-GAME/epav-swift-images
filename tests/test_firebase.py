@@ -7,11 +7,11 @@ class CatalogAdapterTest(unittest.TestCase):
         self.catalog=Firebase()
     @patch('swift_images.firebase.request')
     def test_pagination_preserves_versions_and_original_fields(self,request):
-        doc=dict(id='item',revision='v1',fields={'dadosOriginais':{'mapValue':{'fields':{'Unidade Medida':{'stringValue':'PC'}}}}})
+        doc=dict(id='item',revision='v1',updatedAt='2026-11-17T12:00:00Z',fields={'dadosOriginais':{'mapValue':{'fields':{'Unidade Medida':{'stringValue':'PC'}}}}})
         request.side_effect=[(200,{},json.dumps({'documents':[doc],'next':'item'}).encode()),
             (200,{},b'{"documents":[],"next":null}')]
-        result=self.catalog.list('produtos_swift')
-        self.assertEqual(result[0]['_updateTime'],'v1')
+        result=self.catalog.list('produtos_swift',fields=['dadosOriginais.Unidade Medida'])
+        self.assertEqual(result[0]['_updateTime'],'v1');self.assertEqual(result[0]['_updatedAt'],'2026-11-17T12:00:00Z')
         self.assertEqual(result[0]['dadosOriginais']['Unidade Medida'],'PC')
         self.assertIn('after=item',request.call_args.args[0])
         self.assertTrue(all('firestore' not in c.args[0] for c in request.call_args_list))
