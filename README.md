@@ -1,95 +1,27 @@
-# Imagens Swift — EPAV
+# EPAV Swift Images
 
-Serviço independente do jogo e do painel. Consulta diariamente os sitemaps públicos da Swift, extrai produtos e variantes do JSON-LD e relaciona com `produtos_swift` no Firebase `epav-game`. Também reconhece páginas oficiais com caminho `/detail/`.
+Robô diário de imagens Swift. Os produtos, as revisões de sincronização e as cópias de produtos arquivados ficam no PostgreSQL Neon, acessado pela API EPAV. As fotos ficam no Cloudflare R2. Este robô não usa chave privada Firebase e não consulta o Firestore.
 
-## Correspondência
+## Execução
 
-Prioriza o código original Swift quando presente no nome do arquivo oficial. Quando várias páginas reutilizam o mesmo código, compara o nome e a embalagem para separar a unidade de packs, kits e combos. Depois compara nome normalizado e contexto: abreviações (`BOV`, `FR`, `CONG`, `DESC`, `SG`), pesos e volumes equivalentes, espécie implícita no corte e pequenos erros de grafia. Conserva as diferenças de marca, espécie, corte, tempero, linha e tamanho de embalagem. Correspondências ambíguas ficam pendentes; a imagem anterior é preservada. O catálogo completo, suas margens e as credenciais nunca são publicados neste repositório.
+O workflow `Sincronizar imagens Swift` mantém execução diária às 09:17 UTC e execução manual com simulação, limite, somente produtos sem foto, limpeza de duplicados e verificação de ausentes. `SYNC_ENABLED=true` habilita a tarefa. Requer os segredos `DATA_SYNC_TOKEN` e `IMAGE_SYNC_TOKEN` e a variável `IMAGE_SERVICE_URL`.
 
-Exemplo: `FILE PEITO SWIFT 1KG` pode corresponder a `Filé de peito de frango Swift 1000g`. Uma picanha Friboi não recebe a foto de uma picanha Swift, e uma embalagem de 800g não substitui uma de 1kg. A base contém itens de outros fabricantes e produtos antigos; não há garantia de encontrar todos somente no site da Swift.
+A API do catálogo é `https://epav-product-evaluator.kevinernandes2012.workers.dev`. O segredo de sincronização permite apenas as rotas `/v1/sync/*`; os tokens de jogadores não dão acesso a elas. A API invalida Redis após cada alteração de produto, mesmo se uma etapa posterior do robô falhar.
 
-O robô processa primeiro produtos disponíveis no jogo sem URL de foto. Depois verifica os demais. Produtos com a mesma imagem compartilham download, conversão e upload durante a execução. Um objeto removido do bucket é recriado mesmo que a foto de origem não tenha mudado.
+## Comportamento preservado
 
-## Imagens
+- Consulta o catálogo oficial Swift e busca por código, nome, peso, marca e contexto; resultados ambíguos são mantidos para análise.
+- Usa ETag/Last-Modified e hash para evitar baixar ou publicar fotos inalteradas.
+- Normaliza WebP para 512 × 512 e até 100 KB; o arquivo no R2 é identificado por SHA-256.
+- Preserva fotos manuais do administrador.
+- Deduplicação e remoção de ausentes exigem varredura completa sem erros ou metadados incompletos. Há cópia recuperável no PostgreSQL.
+- Arquivamento e exclusão ocorrem na mesma transação, com revisão do produto e do registro canônico. Edições concorrentes interrompem a operação.
+- A restauração usa `/v1/sync/restore` e recusa substituir um produto existente.
 
-### Administração das fotos
+## Testes
 
-O Worker também disponibiliza `GET /admin/storage` e `PUT /admin/images/swift/<sha256>.webp`. Ambos conferem o ID token e a claim `admin` atual diretamente no Firebase, com limites de requisições por usuário/IP. Nenhuma chave privada de conta de serviço é necessária no Worker; `FIREBASE_WEB_API_KEY` identifica publicamente o projeto. CORS administrativo aceita somente `https://epav-game.github.io`.
+`pip install -r requirements.txt`
 
-O dashboard soma os tamanhos dos arquivos únicos paginando o bucket, incluindo versões anteriores, e guarda a medição por até 60 segundos. Não representa memória RAM nem quantidade de produtos com foto. Upload repetido do mesmo conteúdo reutiliza o objeto; dimensões, hash e limite de 100 KB são validados no servidor. O vínculo manual é salvo pelo painel no Firebase com auditoria.
+`PYTHONPATH=src python -m unittest discover -s tests -v`
 
-O robô preserva produtos com `imagemSwift.manual=true`: não troca a foto nem arquiva esses registros por ausência no site Swift. O painel mantém o envio manual desativado até a publicação autorizada das regras compartilhadas do Firebase, adiada pelo responsável em 04/10/2026. O dashboard independe dessa alteração.
-
-- WebP, 512 × 512 pixels, fundo branco, proporção preservada.
-- Até 100 KiB por arquivo; qualidade ajustada até cumprir o limite.
-- Bucket privado R2 `epav-swift-images`; leitura pública pelo Worker.
-- Chave `swift/<sha256>.webp`: versões imutáveis, arquivos iguais compartilhados.
-- Usa ETag/Last-Modified; compara pixels quando o servidor exige download. Upload e campo do produto só mudam se a foto mudar, estiver ausente ou o padrão de conversão mudar.
-- Usa cache do catálogo público entre execuções, com validação HTTP diária. Esse cache guarda somente metadados das páginas da Swift, sem dados do Firebase ou credenciais.
-- Respeita robots.txt, espera pelo menos um segundo por host, não acessa a busca proibida e não contorna bloqueios do site.
-
-## Firebase
-
-Ao associar uma foto, adiciona `imagemSwift` ao produto: URL, bucket, chave, hash, formato, dimensões, tamanho, origem e data. Usa a versão do documento como precondição, protegendo contra edição simultânea. A coleção privada `sincronizacao_imagens_swift` guarda verificações e validadores HTTP. As classificações e os dados comerciais dos produtos mantidos são preservados.
-
-O Worker aceita apenas imagens WebP 512 × 512 com hash correto e até 100 KiB. Upload exige `IMAGE_SYNC_TOKEN`; não oferece listagem nem exclusão. Arquivos antigos permanecem no bucket. Novas associações registram `matchMethod` e `matchVersion`, além da página e do nome oficial usados como evidência.
-
-## Limpeza recuperável
-
-O agendamento diário também executa `--deduplicate` e `--prune-unmatched`, conforme solicitado para limpar a importação do Excel:
-
-- Duplicados: mesmo código, nome normalizado e marca. Nomes, códigos ou tamanhos diferentes são mantidos. Conserva primeiro o registro editado no admin; depois prefere disponibilidade no jogo, foto existente e unidade `PC`. Não soma valores comerciais.
-- Não encontrados: remove do catálogo ativo os produtos sem correspondência por código, nome ou contexto no catálogo oficial consultado. Correspondências ambíguas são mantidas.
-- A remoção por ausência exige consulta completa do sitemap, pelo menos 100 páginas e 100 produtos oficiais, sem erros de página nem páginas com metadados de imagem ausentes. Uma redução inesperada superior a 15% das páginas em relação ao cache bloqueia essa limpeza. A consulta de uma página específica não permite remoção por ausência.
-- Cada remoção grava o documento completo em `arquivo_produtos_swift`, com motivo, versão original e identificação do registro mantido quando duplicado. A cópia e a exclusão do catálogo ativo acontecem no mesmo commit atômico. A versão do produto e a leitura do registro mantido em uma transação protegem contra edição concorrente.
-- A cópia conserva todos os campos e tipos originais do Firestore. A coleção não é exposta pelo Worker nem pelos artefatos públicos do GitHub; as regras atuais do Firebase não concedem acesso de clientes a ela.
-
-Essas verificações reduzem exclusões por falha de consulta, mas o sitemap pode não representar todos os produtos antigos ou vendidos em outros canais. O arquivo permite recuperar um registro caso necessário:
-
-```powershell
-python -m swift_images.cleanup                         # Apenas calcular duplicados
-python -m swift_images.cleanup --apply                 # Arquivar duplicados e consolidar
-python -m swift_images.cleanup --restore ID_DO_ARQUIVO --apply
-```
-
-A restauração usa o ID original e recusa sobrescrever um produto existente. Requer as mesmas credenciais Firebase da sincronização. `--dry-run` do robô calcula a limpeza sem escrever no banco ou no bucket.
-
-## Implantação
-
-1. `cd worker && npm ci`
-2. Autorizar Wrangler na conta Cloudflare correta.
-3. `npx wrangler r2 bucket create epav-swift-images`
-4. `npx wrangler secret put IMAGE_SYNC_TOKEN` (chave aleatória forte).
-5. `npm run deploy`
-6. No GitHub Actions, configurar os segredos `FIREBASE_SERVICE_ACCOUNT_JSON` e `IMAGE_SYNC_TOKEN` e as variáveis `IMAGE_SERVICE_URL` e `SYNC_ENABLED=true`.
-
-O segredo Firebase permite operações privilegiadas. Nunca colocá-lo nos arquivos do projeto. A chave de upload deve ser a mesma no GitHub e no Worker.
-
-## Execução diária
-
-Workflow **Sincronizar imagens Swift** às 09:17 UTC (06:17 em São Paulo), além de execução manual. O GitHub pode atrasar o horário; em repositórios públicos, desativa agendamentos após 60 dias sem atividade. O relatório contém apenas contadores. Páginas removidas (404) ou sem metadados utilizáveis são contabilizadas em `pagesSkipped` e identificadas nos logs pela URL pública, sem causar falha geral. Erros reais de consulta (`pageErrors`), upload ou Firebase (`errors`) continuam sinalizando execução com erro. Falhas de consulta preservam as fotos e bloqueiam a remoção por ausência. Se nenhuma página fornecer produtos utilizáveis, a execução falha.
-
-```powershell
-$env:PYTHONPATH='src'
-$env:FIREBASE_SERVICE_ACCOUNT_FILE='C:\caminho\service-account.json'
-$env:IMAGE_SERVICE_URL='https://epav-swift-images.SEU-SUBDOMINIO.workers.dev'
-python -m swift_images.sync --dry-run --limit 20
-python -m swift_images.sync --dry-run --deduplicate --prune-unmatched
-python -m unittest discover -s tests -v
-```
-
-Execução real exige `IMAGE_SYNC_TOKEN`. `--limit 0` processa todos os alimentos. O limite se aplica à associação de imagens e à remoção por ausência, não à indexação pública nem à consolidação de duplicados. Na execução diária, produtos sem correspondência são arquivados quando a consulta passa nas verificações de integridade acima.
-
-`--missing-only` restringe uma execução de preenchimento aos produtos disponíveis no jogo sem foto. O agendamento diário continua verificando todas as imagens, inclusive alterações e arquivos ausentes do bucket. A execução manual oferece a mesma opção `missing_only`.
-
-O artefato `resumo-sincronizacao` contém contadores em `latest.json` e resultados sem correspondência em `unmatched.json`, identificados por ID e código, sem nomes internos ou dados comerciais. Motivos: `ambiguous_code`, `ambiguous_name`, `ambiguous_context`, `brand_not_in_official_catalog` e `no_verified_match`. `deduplicated` e `archivedMissing` contam remoções efetivamente arquivadas; `archiveConflicts` registra edições concorrentes e `pruneSkipped` explica o bloqueio da limpeza por ausência. Uma resposta 429 do Firestore interrompe a execução com `blocked: firebase_quota_exceeded`; não repete consultas em massa durante o bloqueio. A próxima execução agendada tenta novamente e prioriza as fotos ainda ausentes.
-
-Para verificar ou repetir um alimento específico, informar juntos `--product-code` e `--source-page`. A página precisa estar no sitemap oficial e sua foto precisa conter o código informado. O mesmo recurso está disponível na execução manual do workflow.
-
-```powershell
-python -m swift_images.sync --product-code 616920 --source-page https://www.swift.com.br/file-de-peito-de-frango-swift-1kg/p --dry-run
-```
-
-## Cache do jogo
-
-O segredo `CACHE_INVALIDATION_TOKEN` autoriza apenas a invalidação do cache de dados públicos em `epav-product-evaluator`. O bot chama o endpoint HTTPS ao encerrar uma execução que gravou fotos, removeu duplicados ou restaurou produtos, inclusive depois de uma falha parcial. Execuções sem alterações e simulações não invalidam o cache. Se a chamada falhar, o resultado do banco permanece válido e o cache expira em até 15 minutos. Transações e versões para remoção continuam usando leituras diretas do Firebase.
+Os relatórios do Actions não contêm dados comerciais nem credenciais. A modelagem e os scripts estão em [epav-modelagem](https://github.com/EPAV-GAME/epav-modelagem).

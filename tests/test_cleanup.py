@@ -38,44 +38,15 @@ class CleanupPlanTest(unittest.TestCase):
         with self.assertRaises(ValueError):archive_action(firebase,product,dict(reason='duplicate',updateTime='new'))
 
 class ArchiveCommitTest(unittest.TestCase):
-    def setUp(self):
-        self.firebase=Firebase({'project_id':'epav-game'})
-        self.firebase.begin_transaction=Mock(return_value='transaction')
-        self.firebase.rollback=Mock()
-        self.fields={'nome':value('A'),'atualizadoEm':{'timestampValue':'2026-10-03T00:00:00Z'},
-                     'dadosOriginais':value({'Margem':33,'Unidade Medida':'ST'})}
-        self.original=dict(name=self.firebase.document_name('produtos_swift','a'),updateTime='old',fields=self.fields)
-
-    def test_backup_and_delete_are_in_same_commit_with_product_and_canonical_preconditions(self):
-        canonical=dict(name=self.firebase.document_name('produtos_swift','b'),updateTime='keep')
-        with patch.object(self.firebase,'raw_document',side_effect=[self.original,canonical]) as read,patch.object(self.firebase,'commit') as commit:
-            self.assertEqual(self.firebase.archive_product('a','old','duplicate','b','keep'),'archived')
-        writes=commit.call_args.args[0]
-        self.assertEqual(commit.call_args.args[1],'transaction')
-        self.assertEqual(read.call_args.args,('produtos_swift','b','transaction'))
-        self.assertEqual(writes[0]['update']['fields']['dados']['mapValue']['fields'],self.fields)
-        self.assertEqual(writes[0]['currentDocument'],{'exists':False})
-        self.assertEqual(writes[1],dict(delete=self.original['name'],currentDocument={'updateTime':'old'}))
-
-    def test_admin_edits_or_missing_canonical_abort_all_deletion(self):
-        for records in [[dict(self.original,updateTime='edited')],[self.original,None]]:
-            with patch.object(self.firebase,'raw_document',side_effect=records),patch.object(self.firebase,'commit') as commit:
-                with self.assertRaises(HTTPFailure):self.firebase.archive_product('a','old','duplicate','b','keep')
-                commit.assert_not_called()
-
-    def test_restore_preserves_firestore_types_and_refuses_overwrite(self):
-        archive={'fields':{'produtoId':value('a'),'dados':{'mapValue':{'fields':self.fields}}}}
-        with patch.object(self.firebase,'raw_document',return_value=archive),patch.object(self.firebase,'commit') as commit:
-            self.firebase.restore_product('archive-id')
-        write=commit.call_args.args[0][0]
-        self.assertEqual(write['currentDocument'],{'exists':False})
-        self.assertEqual(write['update']['fields'],self.fields)
-
-    def test_already_deleted_duplicate_releases_transaction_without_writes(self):
-        with patch.object(self.firebase,'raw_document',return_value=None),patch.object(self.firebase,'commit') as commit:
-            self.assertEqual(self.firebase.archive_product('a','old','duplicate','b','keep'),'already_absent')
-        commit.assert_not_called()
-        self.firebase.rollback.assert_called_once_with('transaction')
+    def test_archive_sends_both_versions_to_atomic_api(self):
+        with patch.dict(os.environ,{'DATA_SYNC_TOKEN':'test'}):firebase=Firebase()
+        with patch.object(firebase,'call',return_value={'status':'archived'}) as call:
+            self.assertEqual(firebase.archive_product('a','old','duplicate','b','keep'),'archived')
+        self.assertEqual(call.call_args.args,('/v1/sync/archive',dict(id='a',version='old',reason='duplicate',canonical_id='b',canonical_version='keep')))
+    def test_restore_uses_server_side_archive(self):
+        with patch.dict(os.environ,{'DATA_SYNC_TOKEN':'test'}):firebase=Firebase()
+        with patch.object(firebase,'call',return_value={'restored':True}) as call:firebase.restore_product('archive-id')
+        call.assert_called_once_with('/v1/sync/restore',{'id':'archive-id'})
 
 class CleanupIntegrationTest(unittest.TestCase):
     def run_sync(self,directory,page_failure=False,metadata_missing=False,dry_run=False,ambiguous=False,targeted=False):

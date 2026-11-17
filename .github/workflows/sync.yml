@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       dry_run:
-        description: 'Simular sem gravar imagens ou alterar Firebase'
+        description: 'Simular sem gravar imagens ou alterar PostgreSQL'
         type: boolean
         default: true
       limit:
@@ -17,7 +17,7 @@ on:
         type: boolean
         default: false
       deduplicate:
-        description: 'Consolidar duplicados com cópia recuperável no Firebase'
+        description: 'Consolidar duplicados com cópia recuperável no PostgreSQL'
         type: boolean
         default: true
       prune_unmatched:
@@ -57,7 +57,7 @@ jobs:
       - name: Sincronizar catálogo
         env:
           PYTHONPATH: src
-          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+          DATA_SYNC_TOKEN: ${{ secrets.DATA_SYNC_TOKEN }}
           CACHE_INVALIDATION_TOKEN: ${{ secrets.CACHE_INVALIDATION_TOKEN }}
           IMAGE_SYNC_TOKEN: ${{ secrets.IMAGE_SYNC_TOKEN }}
           IMAGE_SERVICE_URL: ${{ vars.IMAGE_SERVICE_URL }}

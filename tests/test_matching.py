@@ -120,10 +120,10 @@ class DuplicateAndQuotaTest(unittest.TestCase):
             target=Path(directory)/'latest.json'
             env=dict(FIREBASE_SERVICE_ACCOUNT_JSON='{}',IMAGE_SYNC_TOKEN='test',IMAGE_SERVICE_URL='https://epav-swift-images.test.workers.dev')
             with patch.dict(os.environ,env),patch('sys.argv',['sync','--report',str(target)]),patch('swift_images.sync.Firebase') as firebase,patch('swift_images.sync.SwiftClient') as swift,patch('builtins.print'):
-                firebase.return_value.list.side_effect=HTTPFailure(429,'firestore.googleapis.com')
+                firebase.return_value.list.side_effect=HTTPFailure(429,'epav-product-evaluator.kevinernandes2012.workers.dev')
                 with self.assertRaises(SystemExit):main()
                 swift.assert_not_called()
-            self.assertEqual(json.loads(target.read_text())['blocked'],'firebase_quota_exceeded')
+            self.assertEqual(json.loads(target.read_text())['blocked'],'catalog_rate_limited')
 
     def test_missing_game_products_are_processed_before_existing_or_non_game(self):
         with tempfile.TemporaryDirectory() as directory:

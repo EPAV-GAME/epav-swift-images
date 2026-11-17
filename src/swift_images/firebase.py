@@ -5,8 +5,6 @@ import os
 import re
 import time
 import urllib.parse
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding
 from .core import request, HTTPFailure
 
 def encode(value):
@@ -45,129 +43,42 @@ def decode(data):
     return next(iter(data.values()))
 
 class Firebase:
-    def __init__(self, account):
-        if account.get('project_id') != 'epav-game':
-            raise ValueError('Expected epav-game Firebase project')
-        self.account = account
-        self.base = 'https://firestore.googleapis.com/v1/projects/epav-game/databases/(default)/documents'
-        self.token, self.expires = '', 0
+    """Compatibility name for the PostgreSQL catalog API adapter. No Firebase data access."""
+    def __init__(self, account=None):
+        self.base = os.environ.get('DATA_API_URL','https://epav-product-evaluator.kevinernandes2012.workers.dev').rstrip('/')
+        if self.base != 'https://epav-product-evaluator.kevinernandes2012.workers.dev':
+            raise ValueError('Expected EPAV catalog API')
+        self.token = os.environ.get('DATA_SYNC_TOKEN','')
+        if not self.token: raise ValueError('DATA_SYNC_TOKEN required')
         self.catalog_changed = False
 
     def __enter__(self): return self
-
-    def __exit__(self, *error):
-        if self.catalog_changed:
-            token=os.environ.get('CACHE_INVALIDATION_TOKEN','')
-            try:
-                if not token: raise ValueError('Cache token absent')
-                request('https://epav-product-evaluator.kevinernandes2012.workers.dev/v1/cache/invalidate',
-                        'POST', {'Authorization':'Bearer '+token}, b'')
-                print(json.dumps({'event':'game_cache_invalidated'}),flush=True)
-            except (RuntimeError, ValueError, OSError):
-                # Database changes remain valid and the cache still expires automatically.
-                print(json.dumps({'event':'game_cache_invalidation_failed','maxCatalogDelaySeconds':900}),flush=True)
-        return False
-
-    def headers(self):
-        if time.time() > self.expires - 60:
-            now = int(time.time())
-            payload = {'iss': self.account['client_email'], 'scope': 'https://www.googleapis.com/auth/datastore',
-                       'aud': 'https://oauth2.googleapis.com/token', 'iat': now, 'exp': now + 3600}
-            message = encode(b'{"alg":"RS256","typ":"JWT"}') + b'.' + encode(json.dumps(payload).encode())
-            key = serialization.load_pem_private_key(self.account['private_key'].encode(), password=None)
-            jwt = message + b'.' + encode(key.sign(message, padding.PKCS1v15(), hashes.SHA256()))
-            body = urllib.parse.urlencode({'grant_type': 'urn:ietf:params:oauth:grant-type:jwt-bearer', 'assertion': jwt.decode()}).encode()
-            _, _, response = request('https://oauth2.googleapis.com/token', 'POST', {'Content-Type': 'application/x-www-form-urlencoded'}, body)
-            result = json.loads(response)
-            self.token, self.expires = result['access_token'], now + int(result['expires_in'])
-        return {'Authorization': 'Bearer ' + self.token, 'Content-Type': 'application/json'}
-
-    def list(self, collection, fields=None):
-        documents, token = [], ''
-        while True:
-            params = [('pageSize',500)] + ([('pageToken', token)] if token else [])
-            params += [('mask.fieldPaths',field_path(field)) for field in fields or []]
-            query = urllib.parse.urlencode(params)
-            _, _, body = request(self.base + '/' + collection + '?' + query, headers=self.headers())
-            result = json.loads(body)
-            for doc in result.get('documents', []):
-                documents.append({'id': doc['name'].rsplit('/', 1)[-1], '_updateTime': doc['updateTime'],
-                                  **{k: decode(v) for k, v in doc.get('fields', {}).items()}})
-            token = result.get('nextPageToken')
-            if not token:
-                return documents
-
-    def patch(self, collection, doc_id, fields, update_time=None):
-        query = [('updateMask.fieldPaths', quote_field(field)) for field in fields]
-        if update_time:
-            query.append(('currentDocument.updateTime', update_time))
-        url = self.base + '/' + collection + '/' + urllib.parse.quote(doc_id, safe='') + '?' + urllib.parse.urlencode(query)
-        body = json.dumps({'fields': {k: value(v) for k, v in fields.items()}}).encode()
-        request(url, 'PATCH', self.headers(), body)
-        if collection == 'produtos_swift': self.catalog_changed = True
-
-    def document_name(self, collection, doc_id):
-        if not doc_id or '/' in doc_id or doc_id in ('.','..'):raise ValueError('Invalid document ID')
-        return self.base.removeprefix('https://firestore.googleapis.com/v1/')+'/'+collection+'/'+doc_id
-
-    def raw_document(self, collection, doc_id, transaction=None):
-        self.document_name(collection,doc_id)
-        query='?'+urllib.parse.urlencode({'transaction':transaction}) if transaction else ''
-        status,_,body=request(self.base+'/'+collection+'/'+urllib.parse.quote(doc_id,safe='')+query,headers=self.headers())
-        return json.loads(body) if status==200 else None
-
-    def begin_transaction(self):
-        _,_,body=request(self.base+':beginTransaction','POST',self.headers(),b'{}')
-        return json.loads(body)['transaction']
-
-    def rollback(self, transaction):
-        request(self.base+':rollback','POST',self.headers(),json.dumps({'transaction':transaction}).encode())
-
-    def commit(self, writes, transaction=None):
-        payload={'writes':writes}
-        if transaction:payload['transaction']=transaction
-        _,_,body=request(self.base+':commit','POST',self.headers(),json.dumps(payload).encode())
-        if any('/produtos_swift/' in write.get('delete', write.get('update', {}).get('name','')) for write in writes):
-            self.catalog_changed = True
+    def __exit__(self,*error): return False
+    def headers(self): return {'Authorization':'Bearer '+self.token,'Content-Type':'application/json'}
+    def call(self,path,payload=None):
+        _,_,body=request(self.base+path,'GET' if payload is None else 'POST',self.headers(),
+                         None if payload is None else json.dumps(payload).encode())
         return json.loads(body)
-
-    def archive_product(self, doc_id, update_time, reason, canonical_id=None, canonical_time=None):
-        if reason not in ('duplicate','not_found_in_swift'):raise ValueError('Invalid archive reason')
-        transaction=self.begin_transaction() if canonical_id else None
-        try:
-            result=self._archive_product(doc_id,update_time,reason,canonical_id,canonical_time,transaction)
-            if transaction and result=='already_absent':self.rollback(transaction)
-            return result
-        except BaseException:
-            if transaction:
-                try:self.rollback(transaction)
-                except (RuntimeError,OSError):pass
-            raise
-
-    def _archive_product(self,doc_id,update_time,reason,canonical_id,canonical_time,transaction):
-        original=self.raw_document('produtos_swift',doc_id,transaction)
-        if not original:return 'already_absent'
-        if original.get('updateTime')!=update_time:raise HTTPFailure(412,'firestore.googleapis.com')
-        archive_id=hashlib.sha256((doc_id+'|'+update_time).encode()).hexdigest()
-        meta={'produtoId':doc_id,'motivo':reason,'versaoOriginal':update_time,'duplicadoDe':canonical_id,
-              'arquivadoEm':time.strftime('%Y-%m-%dT%H:%M:%SZ',time.gmtime())}
-        fields={k:value(v) for k,v in meta.items()}
-        # Preserve exact Firestore types, including timestamps and references.
-        fields['dados']={'mapValue':{'fields':original.get('fields',{})}}
-        writes=[]
-        if canonical_id:
-            canonical=self.raw_document('produtos_swift',canonical_id,transaction)
-            if not canonical or canonical.get('updateTime')!=canonical_time:raise HTTPFailure(412,'firestore.googleapis.com')
-        writes.extend([
-            {'update':{'name':self.document_name('arquivo_produtos_swift',archive_id),'fields':fields},'currentDocument':{'exists':False}},
-            {'delete':original['name'],'currentDocument':{'updateTime':update_time}}
-        ])
-        self.commit(writes,transaction)
-        return 'archived'
-
-    def restore_product(self, archive_id):
-        archive=self.raw_document('arquivo_produtos_swift',archive_id)
-        if not archive:raise ValueError('Archive not found')
-        fields=archive['fields'];doc_id=decode(fields['produtoId'])
-        self.commit([{'update':{'name':self.document_name('produtos_swift',doc_id),
-                               'fields':fields['dados']['mapValue']['fields']},'currentDocument':{'exists':False}}])
+    def list(self,collection,fields=None):
+        documents=[];after='';seen=set()
+        while True:
+            result=self.call('/v1/sync/dados/'+collection+'?limit=100&after='+urllib.parse.quote(after,safe=''))
+            for doc in result['documents']:
+                data={k:decode(v) for k,v in doc['fields'].items()}
+                if fields:data={k:v for k,v in data.items() if k in fields}
+                documents.append(dict(data,id=doc['id'],_updateTime=doc['revision']))
+            after=result.get('next')
+            if not after:return documents
+            if after in seen:raise ValueError('Repeated catalog cursor')
+            seen.add(after)
+    def patch(self,collection,doc_id,fields,update_time=None):
+        self.call('/v1/sync/patch',dict(collection=collection,id=doc_id,
+            fields={k:value(v) for k,v in fields.items()},version=update_time))
+        if collection=='produtos_swift':self.catalog_changed=True
+    def archive_product(self,doc_id,update_time,reason,canonical_id=None,canonical_time=None):
+        result=self.call('/v1/sync/archive',dict(id=doc_id,version=update_time,reason=reason,
+            canonical_id=canonical_id,canonical_version=canonical_time))
+        if result['status']=='archived':self.catalog_changed=True
+        return result['status']
+    def restore_product(self,archive_id):
+        self.call('/v1/sync/restore',dict(id=archive_id));self.catalog_changed=True

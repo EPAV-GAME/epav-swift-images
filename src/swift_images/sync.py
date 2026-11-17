@@ -149,10 +149,7 @@ def main():
     if args.limit < 0: parser.error('--limit must be non-negative')
     if bool(args.product_code) != bool(args.source_page):
         parser.error('--product-code and --source-page must be provided together')
-    raw = os.environ.get('FIREBASE_SERVICE_ACCOUNT_JSON')
-    if not raw:
-        raw = Path(os.environ['FIREBASE_SERVICE_ACCOUNT_FILE']).read_text(encoding='utf-8-sig')
-    firebase = Firebase(json.loads(raw))
+    firebase = Firebase()
     with firebase:
         service = os.environ['IMAGE_SERVICE_URL'].rstrip('/')
         if not service.startswith('https://epav-swift-images.') or not service.endswith('.workers.dev'):
@@ -185,7 +182,7 @@ def main():
                 products=[p for p in products if p['id'] not in removed]
             states = {state['id']: state for state in firebase.list('sincronizacao_imagens_swift')}
         except HTTPFailure as error:
-            report.update(errors=1, blocked='firebase_quota_exceeded' if error.status == 429 else 'firebase_unavailable',
+            report.update(errors=1, blocked='catalog_rate_limited' if error.status == 429 else 'catalog_unavailable',
                           httpStatus=error.status,httpHost=error.host)
             write_report(args.report, report, unmatched)
             raise SystemExit(1) from None
@@ -250,7 +247,7 @@ def main():
             except HTTPFailure as error:
                 report['errors'] += 1
                 report.update(httpStatus=error.status,httpHost=error.host)
-                if error.host == 'firestore.googleapis.com' and error.status == 429:
+                if error.host == 'epav-product-evaluator.kevinernandes2012.workers.dev' and error.status == 429:
                     report['blocked'] = 'firebase_quota_exceeded'
                     break
             except (RuntimeError, ValueError, OSError):

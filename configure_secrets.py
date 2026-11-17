@@ -13,16 +13,16 @@ def run(command, payload):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--firebase-file', required=True)
+    parser.add_argument('--data-token-file', required=True)
     parser.add_argument('--account-id', required=True)
     parser.add_argument('--service-url', required=True)
     args = parser.parse_args()
     os.environ['CLOUDFLARE_ACCOUNT_ID'] = args.account_id
-    account = Path(args.firebase_file).read_bytes()
+    account = Path(args.data_token_file).read_bytes()
     token = secrets.token_urlsafe(48).encode()
     repo = 'EPAV-GAME/epav-swift-images'
     run(['node','worker/node_modules/wrangler/bin/wrangler.js','secret','put','IMAGE_SYNC_TOKEN','--config','worker/wrangler.jsonc','--profile','epav'], token)
-    run(['gh','secret','set','FIREBASE_SERVICE_ACCOUNT_JSON','--repo',repo],account)
+    run(['gh','secret','set','DATA_SYNC_TOKEN','--repo',repo],account)
     run(['gh','secret','set','IMAGE_SYNC_TOKEN','--repo',repo],token)
     run(['gh','variable','set','IMAGE_SERVICE_URL','--repo',repo],args.service_url.encode())
     run(['gh','variable','set','SYNC_ENABLED','--repo',repo],b'true')
