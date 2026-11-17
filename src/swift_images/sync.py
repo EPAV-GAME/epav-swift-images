@@ -99,7 +99,7 @@ def sync_one(product, candidate, state, client, firebase, service, token, dry_ru
         # Retain the compact WebP after conversion, not every original multi-MB file.
         if downloads is not None: downloads.responses[response_key] = (status, headers, b'')
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
-    new_state = {k: v for k, v in state.items() if k not in ('id', '_updateTime')}
+    new_state = {k: v for k, v in state.items() if k not in ('id', '_updateTime', '_updatedAt')}
     new_state.update(sourceUrl=source, checkedAt=now, status='unchanged')
     if status == 304:
         if not exists:
